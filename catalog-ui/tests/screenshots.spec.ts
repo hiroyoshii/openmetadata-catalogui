@@ -5,7 +5,7 @@ const SCREENSHOTS_DIR = path.resolve(__dirname, '../../docs/screenshots')
 const OM_API = 'http://127.0.0.1:8585/api/v1'
 
 async function waitLoaded(page: Page) {
-  await page.waitForSelector('.pg-loading', { state: 'detached', timeout: 15000 }).catch(() => {})
+  await page.waitForSelector('.pg-loading', { state: 'detached', timeout: 15000 }).catch(() => { })
   await page.waitForTimeout(600)
 }
 
@@ -80,7 +80,7 @@ test.describe('UI screenshots', () => {
     await page.locator('.tb', { hasText: 'Data Quality' }).click()
     // DQ データのロードを待つ
     await page.waitForSelector('.freshness-card, .tc-item, .no-data', { timeout: 10000 })
-    await page.waitForTimeout(400)
+    await page.waitForTimeout(4000)
 
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, 'data_quality.png') })
   })
