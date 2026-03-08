@@ -1,24 +1,13 @@
-# OpenMetadata サンプル構成
+# OpenMetadata Catalog UI
 
-設計方針 → [design.md](./design.md)
+設計方針: [design.md](./design.md)
 
 ## 起動方法
-
-### 前提条件
-
-- Docker >= 20.10
-- Docker Compose >= v2.2
-- メモリ: **3GB 以上推奨**
-- Python >= 3.11 (登録スクリプト実行用)
-- Node.js >= 18 (Catalog UI 起動用)
 
 ### Step 1: バックエンド起動
 
 ```bash
 docker compose up -d
-
-# 起動確認 (応答が返るまで 2〜3 分待つ)
-curl -s http://localhost:8585/api/v1/system/config/auth
 ```
 
 ### Step 2: メタデータ登録
@@ -53,7 +42,7 @@ curl -s 'http://localhost:8585/api/v1/dataQuality/testCases?limit=10' | python3 
 
 ```bash
 cd catalog-ui
-npm install
+npm ci
 npm run dev
 ```
 
@@ -84,3 +73,7 @@ npm run test:screenshots   # docs/screenshots/ を更新
 ### Lineage グラフ
 
 ![Lineage グラフ](./docs/screenshots/lineage.png)
+
+### Data Quality (鮮度チェック + 品質チェック)
+
+![Data Quality](./docs/screenshots/data_quality.png)

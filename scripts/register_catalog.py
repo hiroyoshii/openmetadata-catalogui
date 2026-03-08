@@ -35,16 +35,22 @@ SLA_TAGS = [
 ]
 
 # ── ドメイン定義 ────────────────────────────────────────────────
+# ビジネスドメイン (業務領域) で分類。公開/収集元の区分は Classification タグで管理。
 DOMAINS = {
-    "source": {
-        "displayName": "収集元",
-        "description": "収集元システム群 (CRM / EC / OMS)",
+    "customer": {
+        "displayName": "顧客",
+        "description": "顧客に関するデータ (CRM・顧客セグメント)",
         "domainType": "Source-aligned",
     },
-    "analytics": {
-        "displayName": "公開/分析",
-        "description": "公開用・集計済みスキーマ群",
-        "domainType": "Consumer-aligned",
+    "order": {
+        "displayName": "注文",
+        "description": "注文・売上に関するデータ (OMS・月次売上)",
+        "domainType": "Source-aligned",
+    },
+    "product": {
+        "displayName": "商品",
+        "description": "商品に関するデータ (EC)",
+        "domainType": "Source-aligned",
     },
 }
 
@@ -74,7 +80,7 @@ SERVICES = {
         "db": "crm_db",
         "schema": "public",
         "tag": f"{CLASSIFICATION}.ingestion",
-        "domain": "source",
+        "domain": "customer",
         "owner_team": {"name": "crm_team",      "displayName": "CRM チーム"},
         "owner_user": {"name": "crm_owner",      "displayName": "鈴木 一郎",   "email": "crm_owner@example.com"},
         "tables": {
@@ -98,7 +104,7 @@ SERVICES = {
         "db": "ec_db",
         "schema": "public",
         "tag": f"{CLASSIFICATION}.ingestion",
-        "domain": "source",
+        "domain": "product",
         "owner_team": {"name": "ec_team",        "displayName": "EC チーム"},
         "owner_user": {"name": "ec_owner",        "displayName": "田中 花子",   "email": "ec_owner@example.com"},
         "tables": {
@@ -123,7 +129,7 @@ SERVICES = {
         "db": "oms_db",
         "schema": "public",
         "tag": f"{CLASSIFICATION}.ingestion",
-        "domain": "source",
+        "domain": "order",
         "owner_team": {"name": "oms_team",       "displayName": "OMS チーム"},
         "owner_user": {"name": "oms_owner",       "displayName": "山本 次郎",   "email": "oms_owner@example.com"},
         "tables": {
@@ -149,13 +155,13 @@ SERVICES = {
         "db": "public_db",
         "schema": "analytics",
         "tag": f"{CLASSIFICATION}.public",
-        "domain": "analytics",
         "owner_team": {"name": "analytics_team", "displayName": "分析チーム"},
         "owner_user": {"name": "analytics_owner","displayName": "佐藤 太郎",   "email": "analytics_owner@example.com"},
         "tables": {
             "monthly_revenue": {
                 "description": "月次売上サマリー。orders + products から集計。",
                 "sla": "daily",
+                "domain": "order",
                 "columns": [
                     _col("year_month",       "CHAR",      "集計月 (YYYY-MM)",   nullable=False),
                     _col("category",         "VARCHAR",   "商品カテゴリ",        nullable=False),
@@ -168,6 +174,7 @@ SERVICES = {
             "customer_segments": {
                 "description": "顧客セグメンテーション結果。customers + orders から生成。",
                 "sla": "daily",
+                "domain": "customer",
                 "columns": [
                     _col("customer_id",     "INT",       "顧客ID",              nullable=False),
                     _col("segment",         "VARCHAR",   "セグメント: high_value/at_risk/new/churned", nullable=False),
@@ -192,6 +199,27 @@ def register_domains(client: OMClient) -> None:
             print(f"   EXISTS {name}")
         else:
             print(f"   ✓ {name} ({d['domainType']})")
+
+
+def _cleanup_obsolete_domains(client: OMClient) -> None:
+    """旧ドメイン (source / analytics) を削除し、サービスのドメイン参照もクリアする。"""
+    obsolete = ["source", "analytics"]
+    for name in obsolete:
+        # まずサービスのドメイン参照をクリア
+        for svc_name, svc in SERVICES.items():
+            if svc.get("domain") is None:
+                # public_service のように domain を持たないサービスは PATCH で参照を除去
+                svc_data = client.get_entity_by_fqn("services/databaseServices", svc_name)
+                if svc_data and svc_data.get("domain", {}).get("name") == name:
+                    client.patch("services/databaseServices", svc_data["id"], [
+                        {"op": "remove", "path": "/domain"}
+                    ])
+                    print(f"   ✓ {svc_name} のドメイン参照を除去")
+        # ドメインエンティティを削除
+        domain_data = client.get_entity_by_fqn("domains", name)
+        if domain_data:
+            client.delete(f"domains/{domain_data['id']}", params={"hardDelete": "true"})
+            print(f"   ✓ 旧ドメイン '{name}' を削除")
 
 
 def register_tags(client: OMClient) -> None:
@@ -251,7 +279,7 @@ def register_service(client: OMClient, svc_name: str, svc: dict) -> None:
         "name": svc_name,
         "serviceType": "CustomDatabase",
         "description": svc["description"],
-        "domain": svc["domain"],
+        "domain": svc.get("domain"),
         "connection": {
             "config": {
                 "type": "CustomDatabase",
@@ -280,6 +308,19 @@ def register_service(client: OMClient, svc_name: str, svc: dict) -> None:
         tags_list = [{"tagFQN": svc["tag"]}]
         if "sla" in tdef:
             tags_list.append({"tagFQN": f"{SLA_CLASSIFICATION}.{tdef['sla']}"})
+        # テーブル単位の domain > サービスレベルの domain の順で適用
+        table_domain = tdef.get("domain") or svc.get("domain")
+        table_fqn = f"{schema_fqn}.{table_name}"
+
+        # 壊れたドメイン参照があれば hard delete して再作成
+        existing = client.get_entity_by_fqn("tables", table_fqn, fields="domain")
+        if existing and existing.get("domain"):
+            try:
+                client.get(f"domains/{existing['domain']['id']}")
+            except RuntimeError:
+                client.delete(f"tables/{existing['id']}", params={"hardDelete": "true"})
+                print(f"      ⚠ broken domain ref, deleting for recreation")
+
         r = client.create_or_update("tables", {
             "name": table_name,
             "databaseSchema": schema_fqn,
@@ -287,9 +328,23 @@ def register_service(client: OMClient, svc_name: str, svc: dict) -> None:
             "tableType": "Regular",
             "columns": tdef["columns"],
             "tags": tags_list,
-            "domain": svc["domain"],
         })
         print(f"      ✓ id={r['id']}  columns={len(tdef['columns'])}")
+
+        # PUT はドメインフィールドを更新しないため PATCH で明示的に設定
+        if table_domain:
+            domain_entity = client.get_entity_by_fqn("domains", table_domain)
+            if domain_entity:
+                client.patch("tables", r["id"], [
+                    {"op": "add", "path": "/domain", "value": {
+                        "id": domain_entity["id"],
+                        "type": "domain",
+                        "name": domain_entity["name"],
+                        "fullyQualifiedName": domain_entity["fullyQualifiedName"],
+                        "description": domain_entity.get("description", ""),
+                        "displayName": domain_entity.get("displayName", domain_entity["name"]),
+                    }}
+                ])
 
 
 def main(host: str = "http://localhost:8585") -> None:
@@ -301,6 +356,7 @@ def main(host: str = "http://localhost:8585") -> None:
     for svc_name, svc in SERVICES.items():
         register_service(client, svc_name, svc)
     register_owners(client)
+    _cleanup_obsolete_domains(client)
 
     print("\n✅ カタログ登録完了")
 

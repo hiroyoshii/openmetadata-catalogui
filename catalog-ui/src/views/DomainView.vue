@@ -40,10 +40,16 @@
               <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>
               {{ (table.columns ?? []).length }} カラム
             </span>
-            <!-- 担当者 (Table の User owner) -->
-            <span v-if="tableOwner(table)" class="tc-owner-badge">
-              {{ tableOwner(table) }}
-            </span>
+            <!-- サービス名 → システム詳細へのリンク -->
+            <RouterLink
+              v-if="table.service"
+              :to="'/system/' + encodeURIComponent(table.service.name ?? '')"
+              class="tc-svc-badge"
+              :class="svcClass(table)"
+              @click.stop
+            >
+              {{ table.service.displayName || table.service.name }}
+            </RouterLink>
             <span v-if="!domainId && table.domain" class="tc-domain-badge">
               {{ table.domain.displayName || table.domain.name }}
             </span>
@@ -99,8 +105,8 @@ function schemaPath(fqn?: string): string {
   return (fqn ?? '').split('.').slice(0, -1).join('.')
 }
 
-function tableOwner(table: Table): string {
-  return table.owners?.find((o) => o.type === 'user')?.displayName ?? ''
+function svcClass(table: Table): string {
+  return (table.service?.name ?? '') === 'public_service' ? 'svc-public' : 'svc-ingestion'
 }
 
 async function load() {
@@ -199,9 +205,12 @@ onMounted(load)
   font-size: 10px; font-weight: 600;
   background: var(--accent-l); color: var(--accent-d);
 }
-.tc-owner-badge {
+.tc-svc-badge {
   padding: 2px 8px; border-radius: 8px;
-  font-size: 10px; font-weight: 600;
-  background: #e3f2fd; color: #1565c0;
+  font-size: 10px; font-weight: 600; cursor: pointer; text-decoration: none;
+  transition: filter .12s;
 }
+.tc-svc-badge:hover { filter: brightness(.9); }
+.svc-ingestion { background: #fff3e0; color: #e65100; }
+.svc-public { background: var(--green-l); color: var(--green); }
 </style>

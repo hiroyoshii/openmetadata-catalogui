@@ -38,6 +38,8 @@ export type EntityRef  = components['schemas']['EntityReference']
 
 // TestCase / DQ (design.md: TestCase + TestCaseResult で品質チェック)
 export type TestCase       = components['schemas']['TestCase']
+export type TestCaseResult = components['schemas']['TestCaseResult']
+export type TestResultValue = components['schemas']['TestResultValue']
 export type TestDefinition = components['schemas']['TestDefinition']
 
 // SampleData (design.md: TableData としてサンプルプレビュー)

@@ -39,16 +39,16 @@ public_service (公開用スキーマ)
 ```mermaid
 erDiagram
     Domain {
-        string name PK "source / analytics"
-        string displayName "収集元 / 公開/分析"
-        string domainType "Source-aligned / Consumer-aligned"
+        string name PK "customer / order / product"
+        string displayName "顧客 / 注文 / 商品"
+        string domainType "Source-aligned"
         string description
     }
     DatabaseService {
         string name PK "crm_service / public_service 等"
         string serviceType "CustomDatabase"
         ref owner "担当者 (User) または担当部署 (Team)"
-        ref domain FK
+        ref domain FK "ビジネスドメイン"
         string description
     }
     Database {
@@ -62,9 +62,9 @@ erDiagram
     Table {
         string fullyQualifiedName PK
         ref schema FK
-        tagLabel[] tags "Classification.ingestion / Classification.public / PII.Sensitive 等"
+        tagLabel[] tags "Classification.ingestion / Classification.public / SLA.daily 等"
         ref owner
-        ref domain FK
+        ref domain FK "ビジネスドメイン (テーブル単位で上書き可)"
     }
     Column {
         string name PK
@@ -124,19 +124,18 @@ erDiagram
 | 管理したい情報 | エンティティ | フィールド | 備考 |
 |---|---|---|---|
 | 出所システム名・識別 | `DatabaseService` | `name` | システムごとに1サービス |
-| 業務ドメイン分類 | `Domain` | `name` | `source`(収集元) / `analytics`(公開) |
+| 業務ドメイン分類 | `Domain` | `name` | `customer` / `order` / `product` |
 | 担当者 | `DatabaseService` | `owner` (User) | |
 | 担当部署 | `DatabaseService` | `owner` (Team) | User と Team は排他。Team 推奨 |
 | 公開区分 | `Table` | `tags` | `Classification.public` / `Classification.ingestion` |
+| 更新頻度 SLA | `Table` | `tags` | `SLA.hourly` / `SLA.daily` / `SLA.weekly` |
 | 機密性 | `Table` / `Column` | `tags` | `PII.Sensitive` 等 |
 | データフロー | `EntityLineage` | `fromEntity` → `toEntity` | 収集元テーブル → 公開テーブル |
-| 期待する更新頻度 | `DataContract.sla` | `refreshFrequency` | SLA として宣言。例: `PT24H` |
-| 稼働率 | `DataContract.sla` | `availability` | SLA として宣言。例: `99.9` |
 | 鮮度チェック (実測) | `TestCase` + `TestCaseResult` | `freshnessTest` | 実績の pass/fail 時系列 |
 | データ品質チェック | `TestCase` + `TestCaseResult` | 各 testDefinition | 行数・NULL・一意性 等 |
 | サンプルデータ | `SampleData` | `rows` / `columns` | テーブルプレビュー用 |
 
-> **稼働率・更新頻度は `DataContract.sla`** に持つ。  
-> Custom Property は任意の拡張用途に残しておく。  
-> 鮮度の「期待値」は DataContract、「実測値・合否」は TestCaseResult で分離する。
+> **Domain はビジネス領域** (顧客/注文/商品) で分類する。  
+> 公開/収集元の区分はビジネス領域とは直交する概念のため `Classification` タグで管理する。  
+> public_service のテーブルはサービス横断的なため、テーブル単位でドメインを設定する。
 

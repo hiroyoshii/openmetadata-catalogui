@@ -100,6 +100,20 @@ class OMClient:
             err_body = e.read().decode()
             raise RuntimeError(f"[PATCH {url}] HTTP {e.code}: {err_body}") from e
 
+    def delete(self, path: str, params: dict | None = None) -> None:
+        """DELETE /api/v1/{path}"""
+        qs = ("?" + urlencode(params)) if params else ""
+        url = f"{self.api_url}/{path.lstrip('/')}{qs}"
+        req = Request(url, headers=self._headers(), method="DELETE")
+        try:
+            with urlopen(req) as resp:
+                resp.read()
+        except HTTPError as e:
+            if e.code == 404:
+                return  # すでに存在しない場合は無視
+            err_body = e.read().decode()
+            raise RuntimeError(f"[DELETE {url}] HTTP {e.code}: {err_body}") from e
+
     def post_idempotent(self, entity_type: str, payload: dict) -> dict:
         """POST でエンティティを作成する。409 (already exists) は無視する。"""
         url = f"{self.api_url}/{entity_type.lstrip('/')}"

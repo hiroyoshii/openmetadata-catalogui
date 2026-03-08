@@ -9,6 +9,12 @@
         Data Catalog
       </RouterLink>
 
+      <!-- Top nav -->
+      <nav class="top-nav">
+        <RouterLink to="/domain" class="nav-link" :class="{ 'nav-on': route.name === 'domain' || route.name === 'domain-all' || route.name === 'table' }">テーブル</RouterLink>
+        <RouterLink to="/systems" class="nav-link" :class="{ 'nav-on': route.name === 'systems' || route.name === 'system' }">システム</RouterLink>
+      </nav>
+
       <nav class="breadcrumb" aria-label="breadcrumb">
         <template v-for="(crumb, i) in breadcrumbs" :key="i">
           <span v-if="i > 0" class="bc-sep">›</span>
@@ -189,6 +195,10 @@ a { text-decoration: none; color: inherit; }
 }
 .logo { font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 7px; white-space: nowrap; color: #fff; }
 .logo svg { opacity: .9; flex-shrink: 0; }
+.top-nav { display: flex; align-items: center; gap: 2px; margin-left: 8px; }
+.nav-link { color: rgba(255,255,255,.75); font-size: 13px; font-weight: 500; padding: 4px 10px; border-radius: 6px; transition: .15s; white-space: nowrap; }
+.nav-link:hover { color: #fff; background: rgba(255,255,255,.15); }
+.nav-on { color: #fff !important; background: rgba(255,255,255,.2); font-weight: 700; }
 .breadcrumb { display: flex; align-items: center; gap: 4px; font-size: 13px; flex-shrink: 0; }
 .bc-sep { opacity: .4; font-size: 11px; }
 .bc-link { color: rgba(255,255,255,.75); padding: 2px 4px; border-radius: 4px; transition: .15s; }

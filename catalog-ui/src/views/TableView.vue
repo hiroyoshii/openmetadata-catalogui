@@ -13,11 +13,18 @@
               <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
               {{ domainName }}
             </span>
-            <span v-if="svc" class="meta-item" :class="tableRoleClass">
+            <RouterLink
+              v-if="svc"
+              :to="'/system/' + encodeURIComponent(table?.service?.name ?? '')"
+              class="meta-item meta-svc-link"
+              :class="tableRoleClass"
+              @click.stop
+            >
               <svg viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 3.79 5 6v12c0 2.21 3.13 4 7 4s7-1.79 7-4V6c0-2.21-3.13-4-7-4zm0 2c3.31 0 5 1.34 5 2s-1.69 2-5 2-5-1.34-5-2 1.69-2 5-2z"/></svg>
-              {{ svc }}
+              <span class="svc-label">{{ svc }}</span>
               <span class="role-badge">{{ tableRole }}</span>
-            </span>
+              <svg class="ext-icon" viewBox="0 0 24 24"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
+            </RouterLink>
             <span v-if="db" class="meta-item">
               <svg viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 3.79 5 6v12c0 2.21 3.13 4 7 4s7-1.79 7-4V6c0-2.21-3.13-4-7-4zm0 2c3.31 0 5 1.34 5 2s-1.69 2-5 2-5-1.34-5-2 1.69-2 5-2z"/></svg>
               {{ db }}
@@ -29,21 +36,6 @@
             <span class="meta-item">
               <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>
               {{ columns.length }} カラム
-            </span>
-            <!-- 担当部署 (Service の Team owner) -->
-            <span v-if="ownerTeam" class="meta-item meta-team">
-              <svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
-              {{ ownerTeam }}
-            </span>
-            <!-- 担当者 (Table の User owner) -->
-            <span v-if="ownerUser" class="meta-item meta-user">
-              <svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
-              {{ ownerUser }}
-            </span>
-            <!-- 更新頻度 (SLA タグ) -->
-            <span v-if="slaLabel" class="meta-item meta-sla">
-              <svg viewBox="0 0 24 24"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm4.24 16L12 15.45 7.77 18l1.12-4.81-3.73-3.23 4.92-.42L12 5l1.92 4.53 4.92.42-3.73 3.23L16.23 18z"/></svg>
-              更新: {{ slaLabel }}
             </span>
           </div>
           <div v-if="table.description" class="ov-desc">{{ table.description }}</div>
@@ -95,23 +87,54 @@
           <div v-else-if="dqError" class="no-data" style="color:var(--red)">{{ dqError }}</div>
           <div v-else-if="testCases.length === 0" class="no-data">このテーブルのテストケースはありません</div>
           <template v-else>
-            <div class="dq-summary">
-              <div class="dq-stat dq-total"><div class="num">{{ testCases.length }}</div><div class="lbl">Total</div></div>
-              <div class="dq-stat dq-pass"><div class="num">{{ dqPass }}</div><div class="lbl">✓ Pass</div></div>
-              <div v-if="dqFail" class="dq-stat dq-fail"><div class="num">{{ dqFail }}</div><div class="lbl">✗ Fail</div></div>
-              <div v-if="dqNone" class="dq-stat dq-none"><div class="num">{{ dqNone }}</div><div class="lbl">— N/A</div></div>
-            </div>
-            <div v-for="tc in testCases" :key="tc.id" class="tc-item">
-              <div class="tc-icon" :class="tcIconClass(tc)">{{ tcIcon(tc) }}</div>
-              <div class="tc-body">
-                <div class="tc-name">{{ tc.name }}</div>
-                <div class="tc-defn">
-                  {{ tc.testDefinition?.displayName ?? tc.testDefinition?.name ?? '' }}
-                  <span v-if="tcParams(tc)" class="tc-params"> | {{ tcParams(tc) }}</span>
-                </div>
-                <div class="tc-result">{{ tc.testCaseResult?.result ?? 'No result yet' }}</div>
+
+            <!-- 鮮度チェック -->
+            <template v-if="freshnessTests.length > 0">
+              <div class="dq-section-hdr">
+                <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20A10 10 0 0 0 12 2zm.5 5v6.25l4.5 2.67-.75 1.23L11 14V7h1.5z"/></svg>
+                鮮度チェック
               </div>
-            </div>
+              <div v-for="tc in freshnessTests" :key="tc.id" class="freshness-card" :class="tcIconClass(tc)">
+                <div class="fr-status-icon">{{ tcIcon(tc) }}</div>
+                <div class="fr-body">
+                  <div class="fr-last-updated">
+                    <span class="fr-lbl">最終更新</span>
+                    <span v-if="getLastUpdatedAt(tc)" class="fr-ts">{{ fmtDatetime(getLastUpdatedAt(tc)!) }}</span>
+                    <span v-else class="fr-ts-none">—</span>
+                  </div>
+                  <div class="fr-meta">
+                    <span class="fr-name">{{ tc.name }}</span>
+                    <span v-if="fmtCheckedAt(tc)" class="fr-checked">チェック日時: {{ fmtCheckedAt(tc) }}</span>
+                  </div>
+                </div>
+              </div>
+            </template>
+
+            <!-- 品質チェック -->
+            <template v-if="qualityTests.length > 0">
+              <div class="dq-section-hdr">
+                <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                品質チェック
+              </div>
+              <div class="dq-summary">
+                <div class="dq-stat dq-total"><div class="num">{{ qualityTests.length }}</div><div class="lbl">Total</div></div>
+                <div class="dq-stat dq-pass"><div class="num">{{ dqPass }}</div><div class="lbl">✓ Pass</div></div>
+                <div v-if="dqFail" class="dq-stat dq-fail"><div class="num">{{ dqFail }}</div><div class="lbl">✗ Fail</div></div>
+                <div v-if="dqNone" class="dq-stat dq-none"><div class="num">{{ dqNone }}</div><div class="lbl">— N/A</div></div>
+              </div>
+              <div v-for="tc in qualityTests" :key="tc.id" class="tc-item">
+                <div class="tc-icon" :class="tcIconClass(tc)">{{ tcIcon(tc) }}</div>
+                <div class="tc-body">
+                  <div class="tc-name">{{ tc.name }}</div>
+                  <div class="tc-defn">
+                    {{ tc.testDefinition?.displayName ?? tc.testDefinition?.name ?? '' }}
+                    <span v-if="tcParams(tc)" class="tc-params"> | {{ tcParams(tc) }}</span>
+                  </div>
+                  <div class="tc-result">{{ tc.testCaseResult?.result ?? 'No result yet' }}</div>
+                </div>
+              </div>
+            </template>
+
           </template>
         </div>
 
@@ -150,7 +173,7 @@
 
 <script setup lang="ts">
 import { api } from '@/api'
-import type { Column, DatabaseService, EntityLineage, Table, Tag, TestCase } from '@/types'
+import type { Column, EntityLineage, Table, Tag, TestCase, TestResultValue } from '@/types'
 import LineageGraph from '@/views/LineageGraph.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -175,7 +198,6 @@ const TABS = [
 const loading = ref(true)
 const error = ref('')
 const table = ref<Table | null>(null)
-const service = ref<DatabaseService | null>(null)
 const lineage = ref<EntityLineage | null>(null)
 const activeTab = ref('columns')
 
@@ -220,23 +242,6 @@ const tableRoleClass = computed(() =>
   tableRole.value === '公開' ? 'meta-item-public' : 'meta-item-ingestion'
 )
 
-/** 担当部署: DatabaseService の Team owner */
-const ownerTeam = computed(() =>
-  service.value?.owners?.find((o) => o.type === 'team')?.displayName ?? ''
-)
-/** 担当者: Table の User owner */
-const ownerUser = computed(() =>
-  table.value?.owners?.find((o) => o.type === 'user')?.displayName ?? ''
-)
-/** 更新頻度: SLA タグ (SLA.daily 等) から日本語表示 */
-const SLA_MAP: Record<string, string> = { hourly: '毎時', daily: '毎日', weekly: '毎週', monthly: '毎月' }
-const slaLabel = computed(() => {
-  const slaTag = (table.value?.tags ?? []).find((t) => (t.tagFQN ?? '').startsWith('SLA.'))
-  if (!slaTag) return ''
-  const key = (slaTag.tagFQN ?? '').split('.')[1] ?? ''
-  return SLA_MAP[key] ?? key
-})
-
 function tagClass(tag: Tag): string {
   const fqn = tag.tagFQN ?? ''
   if (fqn.startsWith('PII.')) return 'tag-pii'
@@ -245,9 +250,32 @@ function tagClass(tag: Tag): string {
   return ''
 }
 
-const dqPass = computed(() => testCases.value.filter((c) => tcStatus(c) === 'Success').length)
-const dqFail = computed(() => testCases.value.filter((c) => ['Failed', 'Aborted'].includes(tcStatus(c))).length)
-const dqNone = computed(() => testCases.value.filter((c) => !['Success', 'Failed', 'Aborted'].includes(tcStatus(c))).length)
+const dqPass = computed(() => qualityTests.value.filter((c) => tcStatus(c) === 'Success').length)
+const dqFail = computed(() => qualityTests.value.filter((c) => ['Failed', 'Aborted'].includes(tcStatus(c))).length)
+const dqNone = computed(() => qualityTests.value.filter((c) => !['Success', 'Failed', 'Aborted'].includes(tcStatus(c))).length)
+
+/** 鮮度チェック: name が _freshness で終わるテストケース */
+const freshnessTests = computed(() => testCases.value.filter((c) => (c.name ?? '').endsWith('_freshness')))
+/** 品質チェック: 鮮度以外の通常テストケース */
+const qualityTests = computed(() => testCases.value.filter((c) => !(c.name ?? '').endsWith('_freshness')))
+
+/** testResultValue から lastUpdatedAt を取り出す */
+function getLastUpdatedAt(tc: TestCase): string | null {
+  const vals = (tc.testCaseResult?.testResultValue ?? []) as TestResultValue[]
+  return vals.find((v) => v.name === 'lastUpdatedAt')?.value ?? null
+}
+
+/** lastUpdatedAt の ISO 文字列を "YYYY-MM-DD HH:mm" 形式に整形 */
+function fmtDatetime(iso: string): string {
+  return iso.replace('T', ' ').slice(0, 16)
+}
+
+/** テスト実行日時 (testCaseResult.timestamp ms → "YYYY-MM-DD HH:mm") */
+function fmtCheckedAt(tc: TestCase): string {
+  const ts = tc.testCaseResult?.timestamp
+  if (!ts) return ''
+  return new Date(ts).toISOString().replace('T', ' ').slice(0, 16)
+}
 
 function tcStatus(tc: TestCase): string {
   return tc.testCaseResult?.testCaseStatus ?? tc.testCaseStatus ?? ''
@@ -327,7 +355,6 @@ async function load() {
   testCases.value = []
   sampleCols.value = []
   sampleRows.value = []
-  service.value = null
   try {
     const [t, l] = await Promise.all([
       api.getTable(tableId.value),
@@ -335,11 +362,6 @@ async function load() {
     ])
     table.value = t
     lineage.value = l
-    // 担当部署取得のため DatabaseService をロード
-    const svcName = t.service?.name
-    if (svcName) {
-      try { service.value = await api.getDatabaseService(svcName) } catch { /* ignore */ }
-    }
     const domId = t.domain?.id
     emit('breadcrumbs', [
       { label: 'ホーム', to: '/' },
@@ -391,18 +413,16 @@ onMounted(load)
 .meta-item-ingestion svg { fill: #e65100; }
 .meta-item-public { background: var(--green-l); border-color: #a5d6a7; color: var(--green); }
 .meta-item-public svg { fill: var(--green); }
+/* service link — 他のバッジと区別するため背景なし・ボーダーのみのリンクスタイル */
+.meta-svc-link { background: transparent !important; border-style: dashed !important; cursor: pointer; text-decoration: none; }
+.meta-svc-link .svc-label { text-decoration: underline; text-underline-offset: 2px; }
+.meta-svc-link:hover { background: rgba(0,0,0,.04) !important; }
+.ext-icon { width: 11px !important; height: 11px !important; opacity: .85; margin-left: 2px; flex-shrink: 0; }
 .role-badge {
   display: inline-block; margin-left: 4px;
   padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 700;
   background: rgba(0,0,0,.08); letter-spacing: .3px;
 }
-/* 担当部署・担当者・更新頻度バッジ */
-.meta-team { background: #e8f5e9; border-color: #a5d6a7; color: #2e7d32; }
-.meta-team svg { fill: #2e7d32; }
-.meta-user { background: #e3f2fd; border-color: #90caf9; color: #1565c0; }
-.meta-user svg { fill: #1565c0; }
-.meta-sla { background: #fff8e1; border-color: #ffe082; color: #f57f17; }
-.meta-sla svg { fill: #f57f17; }
 </style>
 
 <style scoped>
@@ -430,6 +450,43 @@ onMounted(load)
 .cn-pk { background: var(--blue-l); color: var(--blue); }
 
 /* DQ */
+.dq-section-hdr {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+  color: var(--t3); margin-bottom: 10px; margin-top: 4px;
+}
+.dq-section-hdr + .dq-summary,
+.dq-section-hdr + .freshness-card { margin-top: 0; }
+.dq-section-hdr svg { width: 14px; height: 14px; fill: var(--t3); }
+.dq-section-hdr ~ .dq-section-hdr { margin-top: 20px; }
+
+/* 鮮度チェックカード */
+.freshness-card {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 16px; border-radius: 8px; border: 1px solid;
+  margin-bottom: 8px;
+}
+.freshness-card.tc-pass { background: var(--green-l); border-color: #a5d6a7; }
+.freshness-card.tc-fail { background: var(--red-l);   border-color: #ef9a9a; }
+.freshness-card.tc-none { background: var(--bg);       border-color: var(--border); }
+.fr-status-icon {
+  width: 32px; height: 32px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; font-size: 16px; font-weight: 700;
+  background: rgba(255,255,255,.7);
+}
+.tc-pass .fr-status-icon { color: var(--green); }
+.tc-fail .fr-status-icon { color: var(--red); }
+.tc-none .fr-status-icon { color: var(--t3); }
+.fr-body { flex: 1; min-width: 0; }
+.fr-last-updated { display: flex; align-items: baseline; gap: 8px; }
+.fr-lbl { font-size: 11px; font-weight: 700; color: var(--t3); text-transform: uppercase; letter-spacing: .4px; }
+.fr-ts { font-size: 18px; font-weight: 700; color: var(--t1); font-variant-numeric: tabular-nums; }
+.fr-ts-none { font-size: 15px; color: var(--t3); }
+.fr-meta { margin-top: 4px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.fr-name { font-size: 11px; color: var(--t3); font-family: monospace; }
+.fr-checked { font-size: 11px; color: var(--t3); }
+
 .dq-summary { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
 .dq-stat { padding: 10px 16px; border-radius: 8px; border: 1px solid; text-align: center; min-width: 80px; }
 .dq-stat .num { font-size: 22px; font-weight: 700; }

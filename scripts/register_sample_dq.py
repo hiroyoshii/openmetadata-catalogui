@@ -44,9 +44,11 @@ def el(service, db, schema, table, col=None):
 
 # basic TestSuite を作成するテーブル
 SUITE_TABLES = [
-    tbl("crm_service", "crm_db", "public",    "customers"),
-    tbl("oms_service", "oms_db", "public",    "orders"),
-    tbl("ec_service",  "ec_db",  "public",    "products"),
+    tbl("crm_service",    "crm_db",    "public",    "customers"),
+    tbl("oms_service",    "oms_db",    "public",    "orders"),
+    tbl("ec_service",     "ec_db",     "public",    "products"),
+    tbl("public_service", "public_db", "analytics", "monthly_revenue"),
+    tbl("public_service", "public_db", "analytics", "customer_segments"),
 ]
 
 SAMPLE = {
@@ -106,6 +108,25 @@ TESTS = [
     {"name": "products_column_count",   "entityLink": el("ec_service","ec_db","public","products"),                  "testDefinition": "tableColumnCountToEqual",  "parameterValues": [{"name":"columnCount","value":"8"}], "testSuite": tbl("ec_service","ec_db","public","products")+".testSuite"},
 ]
 
+# 鮮度チェック: tableCustomSQLQuery で最終更新日時の存在を確認
+# SQL は参考用 (NoopDB のため実行されない); 結果は testResultValue に lastUpdatedAt として格納する
+FRESHNESS_TESTS = [
+    {"name": "customers_freshness",         "entityLink": el("crm_service","crm_db","public","customers"),                "testDefinition": "tableCustomSQLQuery", "parameterValues": [{"name":"sqlExpression","value":"SELECT MAX(updated_at) FROM customers"},{"name":"strategy","value":"COUNT"},{"name":"threshold","value":"0"}], "testSuite": tbl("crm_service","crm_db","public","customers")+".testSuite"},
+    {"name": "orders_freshness",            "entityLink": el("oms_service","oms_db","public","orders"),                   "testDefinition": "tableCustomSQLQuery", "parameterValues": [{"name":"sqlExpression","value":"SELECT MAX(ordered_at) FROM orders"},{"name":"strategy","value":"COUNT"},{"name":"threshold","value":"0"}],     "testSuite": tbl("oms_service","oms_db","public","orders")+".testSuite"},
+    {"name": "products_freshness",          "entityLink": el("ec_service","ec_db","public","products"),                   "testDefinition": "tableCustomSQLQuery", "parameterValues": [{"name":"sqlExpression","value":"SELECT MAX(created_at) FROM products"},{"name":"strategy","value":"COUNT"},{"name":"threshold","value":"0"}],    "testSuite": tbl("ec_service","ec_db","public","products")+".testSuite"},
+    {"name": "monthly_revenue_freshness",   "entityLink": el("public_service","public_db","analytics","monthly_revenue"), "testDefinition": "tableCustomSQLQuery", "parameterValues": [{"name":"sqlExpression","value":"SELECT MAX(refreshed_at) FROM monthly_revenue"},{"name":"strategy","value":"COUNT"},{"name":"threshold","value":"0"}], "testSuite": tbl("public_service","public_db","analytics","monthly_revenue")+".testSuite"},
+    {"name": "customer_segments_freshness", "entityLink": el("public_service","public_db","analytics","customer_segments"),"testDefinition": "tableCustomSQLQuery", "parameterValues": [{"name":"sqlExpression","value":"SELECT MAX(segmented_at) FROM customer_segments"},{"name":"strategy","value":"COUNT"},{"name":"threshold","value":"0"}], "testSuite": tbl("public_service","public_db","analytics","customer_segments")+".testSuite"},
+]
+
+# 鮮度テスト結果: (status, lastUpdatedAt) — サンプルデータの最大タイムスタンプを使用
+FRESHNESS_RESULTS = {
+    "customers_freshness":         ("Success", "2024-12-01T16:00:00"),
+    "orders_freshness":            ("Success", "2024-11-10T15:00:00"),
+    "products_freshness":          ("Success", "2023-08-01T00:00:00"),
+    "monthly_revenue_freshness":   ("Success", "2024-12-01T03:00:00"),
+    "customer_segments_freshness": ("Success", "2024-12-01T02:00:00"),
+}
+
 DQ_RESULTS = {
     "customers_id_not_null":   ("Success", 3, 3, 0),
     "customers_email_unique":  ("Success", 3, 3, 0),
@@ -155,6 +176,14 @@ def main(host: str = "http://localhost:8585") -> None:
         else:
             print(f"  OK {tc['name']}")
 
+    print("\n=== 鮮度チェック テストケース登録 ===")
+    for tc in FRESHNESS_TESTS:
+        r = post("/dataQuality/testCases", tc)
+        if "_error" in r:
+            print(f"  EXISTS {tc['name']}")
+        else:
+            print(f"  OK {tc['name']}")
+
     # 既存/新規問わず全テストケースを取得して結果を登録
     all_tcs = get("/dataQuality/testCases?limit=50").get("data", [])
     tc_map  = {t["name"]: t for t in all_tcs}
@@ -176,6 +205,22 @@ def main(host: str = "http://localhost:8585") -> None:
             "testResultValue": [{"name": "rowCount", "value": str(total)}],
         })
         print(f"  {'✓' if '_error' not in r else '✗'} {name}")
+
+    print("\n=== 鮮度チェック テスト結果登録 ===")
+    for name, res in FRESHNESS_RESULTS.items():
+        tc = tc_map.get(name)
+        if not tc:
+            print(f"  SKIP {name} (not found)")
+            continue
+        status, last_updated = res
+        fqn_enc = tc.get("fullyQualifiedName", "").replace(".", "%2E")
+        r = put(f"/dataQuality/testCases/{fqn_enc}/testCaseResult", {
+            "timestamp": ts,
+            "testCaseStatus": status,
+            "result": f"最終更新: {last_updated}",
+            "testResultValue": [{"name": "lastUpdatedAt", "value": last_updated}],
+        })
+        print(f"  {'✓' if '_error' not in r else '✗'} {name} (lastUpdatedAt={last_updated})")
 
     print("\n✅ サンプル/DQ 登録完了")
 

@@ -30,6 +30,27 @@ export const api = {
     return get(`/services/databaseServices/name/${encodeURIComponent(name)}?fields=name,description,owners,domain`)
   },
 
+  /** サービスのスキーマ一覧を取得してから、スキーマ別テーブルを集約する */
+  async getTablesByServiceName(svcName: string): Promise<PagedResponse<Table>> {
+    const schemas = await get<PagedResponse<{ name: string; fullyQualifiedName: string }>>(
+      `/databaseSchemas?service=${encodeURIComponent(svcName)}&limit=50&fields=name,fullyQualifiedName`
+    )
+    const svcSchemas = schemas.data.filter((s) =>
+      (s.fullyQualifiedName ?? '').startsWith(svcName + '.')
+    )
+    const results: Table[] = []
+    await Promise.all(
+      svcSchemas.map(async (schema) => {
+        const fqn = schema.fullyQualifiedName ?? ''
+        const res = await get<PagedResponse<Table>>(
+          `/tables?databaseSchema=${encodeURIComponent(fqn)}&limit=100&fields=name,description,tags,service,owners`
+        )
+        results.push(...res.data)
+      })
+    )
+    return { data: results, paging: { total: results.length } }
+  },
+
   getTables(): Promise<PagedResponse<Table>> {
     return get('/tables?limit=100&fields=name,description,columns,tags,databaseSchema,database,service,domain,owners')
   },

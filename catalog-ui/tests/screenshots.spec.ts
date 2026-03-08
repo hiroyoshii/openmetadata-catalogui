@@ -18,6 +18,15 @@ async function fetchFirstTableId(page: Page): Promise<string> {
   return id
 }
 
+/** Return the name of the first DatabaseService from the OpenMetadata API */
+async function fetchFirstServiceName(page: Page): Promise<string> {
+  const res = await page.request.get(`${OM_API}/services/databaseServices?limit=1`)
+  const json = await res.json()
+  const name: string = json?.data?.[0]?.name
+  if (!name) throw new Error('No DatabaseServices returned from OpenMetadata API')
+  return name
+}
+
 test.describe('UI screenshots', () => {
   test('home – ドメイン一覧', async ({ page }) => {
     await page.goto('/')
@@ -55,5 +64,42 @@ test.describe('UI screenshots', () => {
 
     await expect(page.locator('.pane')).toBeVisible()
     await page.screenshot({ path: path.join(SCREENSHOTS_DIR, 'lineage.png') })
+  })
+
+  test('table detail – Data Quality (鮮度チェック)', async ({ page }) => {
+    // customers は freshness + quality テストが両方あるテーブルを狙う
+    const res = await page.request.get(`${OM_API}/tables?limit=50&fields=name,fullyQualifiedName`)
+    const json = await res.json()
+    const customersTable = json?.data?.find((t: { name: string }) => t.name === 'customers')
+      ?? json?.data?.[0]
+    if (!customersTable) throw new Error('No tables found')
+
+    await page.goto(`/table/${customersTable.id}`)
+    await waitLoaded(page)
+
+    await page.locator('.tb', { hasText: 'Data Quality' }).click()
+    // DQ データのロードを待つ
+    await page.waitForSelector('.freshness-card, .tc-item, .no-data', { timeout: 10000 })
+    await page.waitForTimeout(400)
+
+    await page.screenshot({ path: path.join(SCREENSHOTS_DIR, 'data_quality.png') })
+  })
+
+  test('systems – システムカタログ一覧', async ({ page }) => {
+    await page.goto('/systems')
+    await waitLoaded(page)
+
+    await expect(page.locator('.svc-grid')).toBeVisible()
+    await page.screenshot({ path: path.join(SCREENSHOTS_DIR, 'systems.png') })
+  })
+
+  test('system detail – サービス詳細', async ({ page }) => {
+    const svcName = await fetchFirstServiceName(page)
+    await page.goto(`/system/${encodeURIComponent(svcName)}`)
+    await waitLoaded(page)
+
+    await expect(page.locator('.ov-name')).toBeVisible()
+    await expect(page.locator('.svctbl')).toBeVisible()
+    await page.screenshot({ path: path.join(SCREENSHOTS_DIR, 'system_detail.png') })
   })
 })

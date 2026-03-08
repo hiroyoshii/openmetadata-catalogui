@@ -63,8 +63,10 @@ function teamOwner(svc: DatabaseService): string {
 }
 
 function domainClass(name?: string): string {
-  if (!name) return ''
-  return name === 'source' ? 'domain-source' : 'domain-analytics'
+  if (name === 'customer') return 'domain-customer'
+  if (name === 'order') return 'domain-order'
+  if (name === 'product') return 'domain-product'
+  return 'domain-other'
 }
 
 onMounted(async () => {
@@ -96,8 +98,10 @@ onMounted(async () => {
 .svc-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .svc-name { font-size: 15px; font-weight: 700; font-family: monospace; }
 .svc-domain-badge { padding: 2px 9px; border-radius: 10px; font-size: 11px; font-weight: 600; white-space: nowrap; }
-.domain-source { background: #fff3e0; color: #e65100; }
-.domain-analytics { background: var(--green-l); color: var(--green); }
+.domain-customer { background: #e3f2fd; color: #1565c0; }
+.domain-order    { background: #fff3e0; color: #e65100; }
+.domain-product  { background: #e8f5e9; color: #2e7d32; }
+.domain-other    { background: var(--accent-l); color: var(--accent-d); }
 .svc-desc { font-size: 12.5px; color: var(--t2); margin-bottom: 12px; line-height: 1.5; }
 .svc-meta { display: flex; flex-wrap: wrap; gap: 6px; }
 .svc-badge {
