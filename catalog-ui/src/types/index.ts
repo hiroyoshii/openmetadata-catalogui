@@ -1,115 +1,54 @@
-// OpenMetadata API response types
+/**
+ * OpenMetadata API types — design.md のマッピング思想に基づく型定義
+ *
+ * 自動生成: `npm run gen:types` (OM サーバーの swagger.json から生成)
+ * 手動定義は UI 独自の補助型のみ。
+ *
+ * ## design.md マッピング概要
+ *
+ * | 概念              | OpenMetadata エンティティ         |
+ * |-------------------|-----------------------------------|
+ * | 収集元システム    | DatabaseService (システムごとに1つ) |
+ * | 公開スキーマ      | DatabaseService (public_service)   |
+ * | データフロー      | EntityLineage (ingestion → public) |
+ * | 公開区分・機密性  | TagLabel (Classification / PII)    |
+ * | 品質チェック      | TestCase + TestCaseResult          |
+ * | サンプルデータ    | TableData (sampleData)             |
+ */
 
-export interface DomainRef {
-  id: string
-  type: string
-  name: string
-  displayName?: string
-  fullyQualifiedName?: string
-  deleted?: boolean
-}
+import type { components } from './openmetadata'
 
-export interface Domain {
-  id: string
-  name: string
-  fullyQualifiedName: string
-  displayName?: string
-  description?: string
-  domainType?: string
-  version?: number
-}
+// ── OpenMetadata スキーマ型エイリアス ──────────────────────────────────────
 
-export interface Column {
-  name: string
-  dataType: string
-  dataLength?: number
-  dataTypeDisplay?: string
-  description?: string
-  fullyQualifiedName?: string
-  constraint?: 'PRIMARY_KEY' | 'NOT_NULL' | 'NULL' | 'UNIQUE'
-  tags?: Tag[]
-}
+/** 収集元システム / 公開サービスの単位 (design.md: DatabaseService 1システム1サービス) */
+export type DatabaseService = components['schemas']['DatabaseService']
 
-export interface Tag {
-  tagFQN?: string
-  name?: string
-}
+/** ドメイン (EC / Analytics 等の業務領域) */
+export type Domain     = components['schemas']['Domain']
 
-export interface EntityRef {
-  id: string
-  type: string
-  name: string
-  displayName?: string
-  fullyQualifiedName?: string
-  deleted?: boolean
-}
+/** テーブル — `service` フィールドがどの DatabaseService 配下かを示す */
+export type Table      = components['schemas']['Table']
 
-export interface Table {
-  id: string
-  name: string
-  fullyQualifiedName: string
-  description?: string
-  tableType?: string
-  columns?: Column[]
-  tags?: Tag[]
-  databaseSchema?: EntityRef
-  database?: EntityRef
-  service?: EntityRef
-  owner?: EntityRef
-  domain?: DomainRef
-  version?: number
-}
+export type Column     = components['schemas']['Column']
 
-export interface TestDefinition {
-  id?: string
-  name?: string
-  displayName?: string
-}
+/** TagLabel — Classification (public/ingestion) や PII タグとして利用 */
+export type Tag        = components['schemas']['TagLabel']
 
-export interface TestCaseResult {
-  testCaseStatus?: string
-  result?: string
-  timestamp?: number
-}
+export type EntityRef  = components['schemas']['EntityReference']
 
-export interface ParameterValue {
-  name?: string
-  value?: string
-}
+// TestCase / DQ (design.md: TestCase + TestCaseResult で品質チェック)
+export type TestCase       = components['schemas']['TestCase']
+export type TestDefinition = components['schemas']['TestDefinition']
 
-export interface TestCase {
-  id: string
-  name: string
-  entityFQN?: string
-  testCaseStatus?: string
-  testDefinition?: TestDefinition
-  testCaseResult?: TestCaseResult
-  parameterValues?: ParameterValue[]
-}
+// SampleData (design.md: TableData としてサンプルプレビュー)
+export type SampleData = components['schemas']['TableData']
 
-export interface SampleData {
-  columns?: string[]
-  rows?: (string | number | null)[][]
-}
+// Lineage — design.md: 収集元テーブル(ingestion) → 公開テーブル(public) のデータフロー
+export type EntityLineage  = components['schemas']['EntityLineage']
+export type LineageEdge    = components['schemas']['Edge']
+export type LineageDetails = components['schemas']['LineageDetails']
 
-export interface LineageEdge {
-  fromEntity: string
-  toEntity: string
-}
-
-export interface LineageNode {
-  id: string
-  name?: string
-  fullyQualifiedName?: string
-  type?: string
-}
-
-export interface Lineage {
-  entity?: { id: string; name?: string; fullyQualifiedName?: string }
-  nodes?: LineageNode[]
-  upstreamEdges?: LineageEdge[]
-  downstreamEdges?: LineageEdge[]
-}
+// ── UI 独自型 ────────────────────────────────────────────────────────────────
 
 export interface PagedResponse<T> {
   data: T[]

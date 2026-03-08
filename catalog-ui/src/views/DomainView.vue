@@ -40,6 +40,10 @@
               <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>
               {{ (table.columns ?? []).length }} カラム
             </span>
+            <!-- 担当者 (Table の User owner) -->
+            <span v-if="tableOwner(table)" class="tc-owner-badge">
+              {{ tableOwner(table) }}
+            </span>
             <span v-if="!domainId && table.domain" class="tc-domain-badge">
               {{ table.domain.displayName || table.domain.name }}
             </span>
@@ -93,6 +97,10 @@ const filteredTables = computed(() => {
 
 function schemaPath(fqn?: string): string {
   return (fqn ?? '').split('.').slice(0, -1).join('.')
+}
+
+function tableOwner(table: Table): string {
+  return table.owners?.find((o) => o.type === 'user')?.displayName ?? ''
 }
 
 async function load() {
@@ -190,5 +198,10 @@ onMounted(load)
   margin-left: auto; padding: 2px 8px; border-radius: 8px;
   font-size: 10px; font-weight: 600;
   background: var(--accent-l); color: var(--accent-d);
+}
+.tc-owner-badge {
+  padding: 2px 8px; border-radius: 8px;
+  font-size: 10px; font-weight: 600;
+  background: #e3f2fd; color: #1565c0;
 }
 </style>

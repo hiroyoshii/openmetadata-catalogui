@@ -3,7 +3,8 @@ import type {
   Table,
   TestCase,
   SampleData,
-  Lineage,
+  EntityLineage,
+  DatabaseService,
   PagedResponse,
 } from '@/types'
 
@@ -20,26 +21,29 @@ export const api = {
     return get('/domains?limit=50')
   },
 
+  /** 全 DatabaseService 一覧 (収集元 + 公開サービス) */
+  getDatabaseServices(): Promise<PagedResponse<DatabaseService>> {
+    return get('/services/databaseServices?limit=50&fields=name,description,owners,domain')
+  },
+
+  getDatabaseService(name: string): Promise<DatabaseService> {
+    return get(`/services/databaseServices/name/${encodeURIComponent(name)}?fields=name,description,owners,domain`)
+  },
+
   getTables(): Promise<PagedResponse<Table>> {
-    return get(
-      '/tables?limit=100&fields=name,description,columns,tags,databaseSchema,database,domain'
-    )
+    return get('/tables?limit=100&fields=name,description,columns,tags,databaseSchema,database,service,domain,owners')
   },
 
   getTable(id: string): Promise<Table> {
-    return get(
-      `/tables/${id}?fields=name,description,columns,tags,databaseSchema,database,owners,domain`
-    )
+    return get(`/tables/${id}?fields=name,description,columns,tags,databaseSchema,database,service,owners,domain`)
   },
 
-  getLineage(id: string): Promise<Lineage> {
+  getLineage(id: string): Promise<EntityLineage> {
     return get(`/lineage/table/${id}?upstreamDepth=3&downstreamDepth=3`)
   },
 
   getTestCases(fqn: string): Promise<PagedResponse<TestCase>> {
-    return get(
-      `/dataQuality/testCases?entityFQN=${encodeURIComponent(fqn)}&limit=100&fields=testDefinition,testCaseResult,parameterValues`
-    )
+    return get(`/dataQuality/testCases?entityFQN=${encodeURIComponent(fqn)}&limit=100&fields=testDefinition,testCaseResult,parameterValues`)
   },
 
   getSampleData(id: string): Promise<{ sampleData?: SampleData } & SampleData> {

@@ -1,19 +1,14 @@
 """
-System Catalog + Data Catalog 初期登録スクリプト
+カタログ登録スクリプト
 
-登録内容:
-  [System Catalog]
-    - DatabaseService : sample_db_service
-    - PipelineService : local_airflow
-
-  [Data Catalog]
-    - Database        : sample_db
-    - Schema          : public, analytics
-    - Tables          : customers, products, orders, monthly_revenue, customer_segments
-      (カラム定義・説明・タグ付け含む)
+設計方針 (design.md より):
+  - 収集元システムごとに DatabaseService を分離 (crm / ec / oms)
+  - 公開用テーブルは public_service にまとめる
+  - Tag Classification.ingestion / Classification.public で可視性を分類
+  - Lineage で収集元 → 公開テーブルを接続 (register_lineage.py)
 
 使用方法:
-    python scripts/register_catalog.py [--host http://localhost:8585] [--user admin] [--pass admin]
+    python scripts/register_catalog.py [--host http://localhost:8585]
 """
 
 import argparse
@@ -24,11 +19,38 @@ sys.path.insert(0, str(Path(__file__).parent))
 from helpers.om_client import OMClient
 
 
-# ── テーブル定義 ───────────────────────────────────────────────
+# ── タグ定義 ────────────────────────────────────────────────────
 
-def _col(name: str, data_type: str, description: str,
-         nullable: bool = True, tags: list | None = None) -> dict:
-    c: dict = {
+CLASSIFICATION = "Classification"
+TAGS = [
+    {"name": "ingestion", "description": "収集元システムのテーブル (内部用)"},
+    {"name": "public",    "description": "外部公開テーブル"},
+]
+
+SLA_CLASSIFICATION = "SLA"
+SLA_TAGS = [
+    {"name": "hourly",  "description": "毎時更新 (PT1H)"},
+    {"name": "daily",   "description": "毎日更新 (PT24H)"},
+    {"name": "weekly",  "description": "毎週更新 (PT168H)"},
+]
+
+# ── ドメイン定義 ────────────────────────────────────────────────
+DOMAINS = {
+    "source": {
+        "displayName": "収集元",
+        "description": "収集元システム群 (CRM / EC / OMS)",
+        "domainType": "Source-aligned",
+    },
+    "analytics": {
+        "displayName": "公開/分析",
+        "description": "公開用・集計済みスキーマ群",
+        "domainType": "Consumer-aligned",
+    },
+}
+
+
+def _col(name, data_type, description, nullable=True, tags=None):
+    c = {
         "name": name,
         "dataType": data_type,
         "description": description,
@@ -41,94 +63,195 @@ def _col(name: str, data_type: str, description: str,
     return c
 
 
-TABLE_DEFS = {
-    "public.customers": {
-        "description": "顧客マスタ。CRMシステムから日次同期。",
-        "tableType": "Regular",
-        "columns": [
-            _col("customer_id", "INT",       "顧客ID (自動採番)",                          nullable=False),
-            _col("name",        "VARCHAR",   "顧客名 (個人情報)",                          nullable=False, tags=["PII.Sensitive"]),
-            _col("email",       "VARCHAR",   "メールアドレス (個人情報・ユニーク制約あり)",  nullable=False, tags=["PII.Sensitive"]),
-            _col("country",     "VARCHAR",   "国コード (ISO 3166-1 alpha-2)",              nullable=False),
-            _col("tier",        "VARCHAR",   "顧客ランク: standard / premium / enterprise", nullable=False),
-            _col("created_at",  "TIMESTAMP", "レコード作成日時",                           nullable=False),
-            _col("updated_at",  "TIMESTAMP", "レコード更新日時",                           nullable=False),
-        ],
+# ── サービス定義 ────────────────────────────────────────────────
+#
+# 各エントリ:
+#   service_name → { description, db, schema, tag, tables: { table_name → def } }
+
+SERVICES = {
+    "crm_service": {
+        "description": "CRM システム (顧客データ)",
+        "db": "crm_db",
+        "schema": "public",
+        "tag": f"{CLASSIFICATION}.ingestion",
+        "domain": "source",
+        "owner_team": {"name": "crm_team",      "displayName": "CRM チーム"},
+        "owner_user": {"name": "crm_owner",      "displayName": "鈴木 一郎",   "email": "crm_owner@example.com"},
+        "tables": {
+            "customers": {
+                "description": "顧客マスタ。CRM からの収集データ。",
+                "sla": "daily",
+                "columns": [
+                    _col("customer_id", "INT",       "顧客ID",                           nullable=False),
+                    _col("name",        "VARCHAR",   "顧客名",                            nullable=False, tags=["PII.Sensitive"]),
+                    _col("email",       "VARCHAR",   "メールアドレス",                     nullable=False, tags=["PII.Sensitive"]),
+                    _col("country",     "VARCHAR",   "国コード (ISO 3166-1 alpha-2)",     nullable=False),
+                    _col("tier",        "VARCHAR",   "顧客ランク: standard/premium/enterprise", nullable=False),
+                    _col("created_at",  "TIMESTAMP", "作成日時",                          nullable=False),
+                    _col("updated_at",  "TIMESTAMP", "更新日時",                          nullable=False),
+                ],
+            },
+        },
     },
-    "public.products": {
-        "description": "商品マスタ。ECシステムと同期。",
-        "tableType": "Regular",
-        "columns": [
-            _col("product_id",  "INT",       "商品ID (自動採番)",              nullable=False),
-            _col("sku",         "VARCHAR",   "商品コード (Stock Keeping Unit)", nullable=False),
-            _col("name",        "VARCHAR",   "商品名",                          nullable=False),
-            _col("category",    "VARCHAR",   "商品カテゴリ",                    nullable=False),
-            _col("price",       "NUMERIC",   "販売価格 (税抜・円)",              nullable=False),
-            _col("stock_qty",   "INT",       "在庫数量",                        nullable=False),
-            _col("is_active",   "BOOLEAN",   "販売中フラグ",                    nullable=False),
-            _col("created_at",  "TIMESTAMP", "レコード作成日時",                nullable=False),
-        ],
+    "ec_service": {
+        "description": "EC システム (商品データ)",
+        "db": "ec_db",
+        "schema": "public",
+        "tag": f"{CLASSIFICATION}.ingestion",
+        "domain": "source",
+        "owner_team": {"name": "ec_team",        "displayName": "EC チーム"},
+        "owner_user": {"name": "ec_owner",        "displayName": "田中 花子",   "email": "ec_owner@example.com"},
+        "tables": {
+            "products": {
+                "description": "商品マスタ。EC システムからの収集データ。",
+                "sla": "weekly",
+                "columns": [
+                    _col("product_id", "INT",       "商品ID",                     nullable=False),
+                    _col("sku",        "VARCHAR",   "商品コード (SKU)",             nullable=False),
+                    _col("name",       "VARCHAR",   "商品名",                      nullable=False),
+                    _col("category",   "VARCHAR",   "商品カテゴリ",                 nullable=False),
+                    _col("price",      "NUMERIC",   "販売価格 (税抜・円)",           nullable=False),
+                    _col("stock_qty",  "INT",       "在庫数量",                    nullable=False),
+                    _col("is_active",  "BOOLEAN",   "販売中フラグ",                 nullable=False),
+                    _col("created_at", "TIMESTAMP", "作成日時",                    nullable=False),
+                ],
+            },
+        },
     },
-    "public.orders": {
-        "description": "注文履歴。customers / products を親テーブルとする (Lineage確認用)。",
-        "tableType": "Regular",
-        "columns": [
-            _col("order_id",     "INT",       "注文ID (自動採番)",                             nullable=False),
-            _col("customer_id",  "INT",       "顧客ID (public.customers への外部キー)",         nullable=False),
-            _col("product_id",   "INT",       "商品ID (public.products への外部キー)",          nullable=False),
-            _col("quantity",     "INT",       "注文数量",                                       nullable=False),
-            _col("unit_price",   "NUMERIC",   "単価",                                           nullable=False),
-            _col("total_amount", "NUMERIC",   "合計金額 (quantity × unit_price の計算列)",      nullable=True),
-            _col("status",       "VARCHAR",   "注文ステータス: pending/paid/shipped/delivered/cancelled", nullable=False),
-            _col("ordered_at",   "TIMESTAMP", "注文日時",                                       nullable=False),
-            _col("shipped_at",   "TIMESTAMP", "出荷日時",                                       nullable=True),
-        ],
+    "oms_service": {
+        "description": "OMS (注文管理システム)",
+        "db": "oms_db",
+        "schema": "public",
+        "tag": f"{CLASSIFICATION}.ingestion",
+        "domain": "source",
+        "owner_team": {"name": "oms_team",       "displayName": "OMS チーム"},
+        "owner_user": {"name": "oms_owner",       "displayName": "山本 次郎",   "email": "oms_owner@example.com"},
+        "tables": {
+            "orders": {
+                "description": "注文履歴。OMS からの収集データ。",
+                "sla": "hourly",
+                "columns": [
+                    _col("order_id",     "INT",       "注文ID",                     nullable=False),
+                    _col("customer_id",  "INT",       "顧客ID (crm.customers 参照)", nullable=False),
+                    _col("product_id",   "INT",       "商品ID (ec.products 参照)",   nullable=False),
+                    _col("quantity",     "INT",       "注文数量",                    nullable=False),
+                    _col("unit_price",   "NUMERIC",   "単価",                        nullable=False),
+                    _col("total_amount", "NUMERIC",   "合計金額",                    nullable=True),
+                    _col("status",       "VARCHAR",   "ステータス: pending/paid/shipped/delivered/cancelled", nullable=False),
+                    _col("ordered_at",   "TIMESTAMP", "注文日時",                    nullable=False),
+                    _col("shipped_at",   "TIMESTAMP", "出荷日時",                    nullable=True),
+                ],
+            },
+        },
     },
-    "analytics.monthly_revenue": {
-        "description": "月次売上サマリー。orders + products から集計 (ETLパイプラインで更新)。",
-        "tableType": "Regular",
-        "columns": [
-            _col("year_month",       "CHAR",    "集計月 (YYYY-MM 形式)",   nullable=False),
-            _col("category",         "VARCHAR", "商品カテゴリ",             nullable=False),
-            _col("total_orders",     "INT",     "注文件数",                 nullable=False),
-            _col("total_revenue",    "NUMERIC", "売上合計 (円)",            nullable=False),
-            _col("avg_order_amount", "NUMERIC", "平均注文金額",             nullable=False),
-            _col("refreshed_at",     "TIMESTAMP", "集計更新日時",           nullable=False),
-        ],
-    },
-    "analytics.customer_segments": {
-        "description": "顧客セグメンテーション結果。customers + orders から生成 (MLパイプライン)。",
-        "tableType": "Regular",
-        "columns": [
-            _col("customer_id",     "INT",     "顧客ID",                                            nullable=False),
-            _col("segment",         "VARCHAR", "セグメントラベル: high_value / at_risk / new / churned", nullable=False),
-            _col("lifetime_value",  "NUMERIC", "顧客生涯価値 (LTV)",                                nullable=False),
-            _col("total_orders",    "INT",     "累計注文件数",                                      nullable=False),
-            _col("last_order_date", "DATE",    "最終注文日",                                        nullable=True),
-            _col("segmented_at",    "TIMESTAMP", "セグメント更新日時",                              nullable=False),
-        ],
+    "public_service": {
+        "description": "公開スキーマ (外部提供・集計済みテーブル群)",
+        "db": "public_db",
+        "schema": "analytics",
+        "tag": f"{CLASSIFICATION}.public",
+        "domain": "analytics",
+        "owner_team": {"name": "analytics_team", "displayName": "分析チーム"},
+        "owner_user": {"name": "analytics_owner","displayName": "佐藤 太郎",   "email": "analytics_owner@example.com"},
+        "tables": {
+            "monthly_revenue": {
+                "description": "月次売上サマリー。orders + products から集計。",
+                "sla": "daily",
+                "columns": [
+                    _col("year_month",       "CHAR",      "集計月 (YYYY-MM)",   nullable=False),
+                    _col("category",         "VARCHAR",   "商品カテゴリ",        nullable=False),
+                    _col("total_orders",     "INT",       "注文件数",            nullable=False),
+                    _col("total_revenue",    "NUMERIC",   "売上合計 (円)",       nullable=False),
+                    _col("avg_order_amount", "NUMERIC",   "平均注文金額",        nullable=False),
+                    _col("refreshed_at",     "TIMESTAMP", "集計更新日時",        nullable=False),
+                ],
+            },
+            "customer_segments": {
+                "description": "顧客セグメンテーション結果。customers + orders から生成。",
+                "sla": "daily",
+                "columns": [
+                    _col("customer_id",     "INT",       "顧客ID",              nullable=False),
+                    _col("segment",         "VARCHAR",   "セグメント: high_value/at_risk/new/churned", nullable=False),
+                    _col("lifetime_value",  "NUMERIC",   "顧客生涯価値 (LTV)",  nullable=False),
+                    _col("total_orders",    "INT",       "累計注文件数",         nullable=False),
+                    _col("last_order_date", "DATE",      "最終注文日",           nullable=True),
+                    _col("segmented_at",    "TIMESTAMP", "セグメント更新日時",   nullable=False),
+                ],
+            },
+        },
     },
 }
 
-SCHEMA_OF = {
-    "public.customers":         "public",
-    "public.products":          "public",
-    "public.orders":            "public",
-    "analytics.monthly_revenue":    "analytics",
-    "analytics.customer_segments":  "analytics",
-}
 
-TABLE_NAME_OF = {k: k.split(".", 1)[1] for k in TABLE_DEFS}
+# ── 登録処理 ────────────────────────────────────────────────────
+
+def register_domains(client: OMClient) -> None:
+    print("▶ Domain を登録中...")
+    for name, d in DOMAINS.items():
+        r = client.post_idempotent("domains", {"name": name, **d})
+        if r.get("_already_exists"):
+            print(f"   EXISTS {name}")
+        else:
+            print(f"   ✓ {name} ({d['domainType']})")
 
 
-# ── 登録処理 ──────────────────────────────────────────────────
+def register_tags(client: OMClient) -> None:
+    print(f"▶ Classification '{CLASSIFICATION}' / '{SLA_CLASSIFICATION}' タグを登録中...")
+    for clf, tags in [(CLASSIFICATION, TAGS), (SLA_CLASSIFICATION, SLA_TAGS)]:
+        client.post_idempotent("classifications", {
+            "name": clf,
+            "description": "データの公開区分" if clf == CLASSIFICATION else "更新頻度の SLA 分類",
+        })
+        for tag in tags:
+            client.post_idempotent("tags", {
+                "classification": clf,
+                "name": tag["name"],
+                "description": tag["description"],
+            })
+    print(f"   ✓ Classification.ingestion / Classification.public")
+    print(f"   ✓ SLA.hourly / SLA.daily / SLA.weekly")
 
-def register_database_service(client: OMClient) -> str:
-    print("▶ DatabaseService 'sample_db_service' を登録中...")
+
+def register_owners(client: OMClient) -> None:
+    """各サービス・テーブルに担当チーム(Team)と担当者(User)を設定する。"""
+    print("▶ Owner (Team/User) を登録中...")
+    for svc_name, svc in SERVICES.items():
+        # Team (担当部署) → DatabaseService の owner
+        team = client.create_or_update("teams", {
+            "name": svc["owner_team"]["name"],
+            "displayName": svc["owner_team"]["displayName"],
+            "teamType": "Group",  # Group のみエンティティの owner になれる
+        })
+        # User (担当者) → 各 Table の owner
+        user = client.create_or_update("users", {
+            "name": svc["owner_user"]["name"],
+            "displayName": svc["owner_user"]["displayName"],
+            "email": svc["owner_user"]["email"],
+        })
+        # Service に Team を PATCH
+        svc_data = client.get_entity_by_fqn("services/databaseServices", svc_name)
+        if svc_data:
+            client.patch("services/databaseServices", svc_data["id"], [
+                {"op": "add", "path": "/owners", "value": [{"id": team["id"], "type": "team"}]},
+            ])
+        # 各 Table に User を PATCH
+        db, schema = svc["db"], svc["schema"]
+        for table_name in svc["tables"]:
+            tbl_fqn = f"{svc_name}.{db}.{schema}.{table_name}"
+            tbl_data = client.get_entity_by_fqn("tables", tbl_fqn)
+            if tbl_data:
+                client.patch("tables", tbl_data["id"], [
+                    {"op": "add", "path": "/owners", "value": [{"id": user["id"], "type": "user"}]},
+                ])
+        print(f"   ✓ {svc_name}: team={svc['owner_team']['displayName']}, user={svc['owner_user']['displayName']}")
+
+
+def register_service(client: OMClient, svc_name: str, svc: dict) -> None:
+    print(f"▶ DatabaseService '{svc_name}' を登録中...")
     result = client.create_or_update("services/databaseServices", {
-        "name": "sample_db_service",
+        "name": svc_name,
         "serviceType": "CustomDatabase",
-        "description": "API push 型デモ用 DatabaseService (実DB接続なし)",
+        "description": svc["description"],
+        "domain": svc["domain"],
         "connection": {
             "config": {
                 "type": "CustomDatabase",
@@ -137,96 +260,53 @@ def register_database_service(client: OMClient) -> str:
         },
     })
     print(f"   ✓ id={result['id']}")
-    return result["id"]
 
-
-def register_pipeline_service(client: OMClient) -> str:
-    print("▶ PipelineService 'local_airflow' を登録中...")
-    result = client.create_or_update("services/pipelineServices", {
-        "name": "local_airflow",
-        "serviceType": "Airflow",
-        "description": "push 型構成での自律 Airflow インスタンス",
-        "connection": {
-            "config": {
-                "type": "Airflow",
-                "hostPort": "http://ingestion:8080",
-                "connection": {"type": "Backend"},
-            }
-        },
+    db_fqn = f"{svc_name}.{svc['db']}"
+    print(f"   ▶ Database '{svc['db']}'...")
+    client.create_or_update("databases", {
+        "name": svc["db"],
+        "service": svc_name,
     })
-    print(f"   ✓ id={result['id']}")
-    return result["id"]
 
-
-def register_database(client: OMClient, service_fqn: str) -> str:
-    print("▶ Database 'sample_db' を登録中...")
-    result = client.create_or_update("databases", {
-        "name": "sample_db",
-        "service": service_fqn,
-        "description": "API push 型デモ用データベース",
+    schema_fqn = f"{db_fqn}.{svc['schema']}"
+    print(f"   ▶ Schema '{svc['schema']}'...")
+    client.create_or_update("databaseSchemas", {
+        "name": svc["schema"],
+        "database": db_fqn,
     })
-    print(f"   ✓ id={result['id']}")
-    return f"{service_fqn}.sample_db"
 
-
-def register_schemas(client: OMClient, db_fqn: str) -> dict[str, str]:
-    schema_fqns: dict[str, str] = {}
-    for schema_name in ("public", "analytics"):
-        print(f"▶ DatabaseSchema '{schema_name}' を登録中...")
-        result = client.create_or_update("databaseSchemas", {
-            "name": schema_name,
-            "database": db_fqn,
-            "description": f"スキーマ: {schema_name}",
-        })
-        fqn = f"{db_fqn}.{schema_name}"
-        schema_fqns[schema_name] = fqn
-        print(f"   ✓ id={result['id']}")
-    return schema_fqns
-
-
-def register_tables(client: OMClient, schema_fqns: dict[str, str]) -> dict[str, str]:
-    table_ids: dict[str, str] = {}
-    for key, definition in TABLE_DEFS.items():
-        schema_name = SCHEMA_OF[key]
-        table_name  = TABLE_NAME_OF[key]
-        schema_fqn  = schema_fqns[schema_name]
-        print(f"▶ Table '{key}' を登録中...")
-        result = client.create_or_update("tables", {
+    for table_name, tdef in svc["tables"].items():
+        print(f"   ▶ Table '{table_name}' (tag: {svc['tag']})...")
+        tags_list = [{"tagFQN": svc["tag"]}]
+        if "sla" in tdef:
+            tags_list.append({"tagFQN": f"{SLA_CLASSIFICATION}.{tdef['sla']}"})
+        r = client.create_or_update("tables", {
             "name": table_name,
             "databaseSchema": schema_fqn,
-            "description": definition["description"],
-            "tableType": definition["tableType"],
-            "columns": definition["columns"],
+            "description": tdef["description"],
+            "tableType": "Regular",
+            "columns": tdef["columns"],
+            "tags": tags_list,
+            "domain": svc["domain"],
         })
-        table_ids[key] = result["id"]
-        print(f"   ✓ id={result['id']}  columns={len(definition['columns'])}")
-    return table_ids
+        print(f"      ✓ id={r['id']}  columns={len(tdef['columns'])}")
 
 
-# ── メイン ────────────────────────────────────────────────────
+def main(host: str = "http://localhost:8585") -> None:
+    client = OMClient(host)
+    client.login()
 
-def main():
-    parser = argparse.ArgumentParser(description="OpenMetadata カタログ初期登録")
-    parser.add_argument("--host", default="http://localhost:8585")
-    parser.add_argument("--user", default="admin")
-    parser.add_argument("--password", default="admin")
-    args = parser.parse_args()
-
-    client = OMClient(args.host)
-    client.login(args.user, args.password)
-
-    # System Catalog
-    register_database_service(client)
-    register_pipeline_service(client)
-
-    # Data Catalog
-    db_fqn      = register_database(client, "sample_db_service")
-    schema_fqns = register_schemas(client, db_fqn)
-    register_tables(client, schema_fqns)
+    register_domains(client)
+    register_tags(client)
+    for svc_name, svc in SERVICES.items():
+        register_service(client, svc_name, svc)
+    register_owners(client)
 
     print("\n✅ カタログ登録完了")
-    print(f"   OpenMetadata UI: {args.host}")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default="http://localhost:8585")
+    args = parser.parse_args()
+    main(args.host)

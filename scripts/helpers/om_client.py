@@ -86,3 +86,30 @@ class OMClient:
         if not entity:
             raise ValueError(f"Entity not found: {entity_type}/{fqn}")
         return entity["id"]
+
+    def patch(self, entity_type: str, entity_id: str, ops: list) -> dict:
+        """PATCH /api/v1/{entity_type}/{entity_id} with JSON Patch operations."""
+        url = f"{self.api_url}/{entity_type.lstrip('/')}/{entity_id}"
+        data = json.dumps(ops).encode()
+        h = {**self._headers(), "Content-Type": "application/json-patch+json"}
+        req = Request(url, data=data, headers=h, method="PATCH")
+        try:
+            with urlopen(req) as resp:
+                return json.loads(resp.read())
+        except HTTPError as e:
+            err_body = e.read().decode()
+            raise RuntimeError(f"[PATCH {url}] HTTP {e.code}: {err_body}") from e
+
+    def post_idempotent(self, entity_type: str, payload: dict) -> dict:
+        """POST でエンティティを作成する。409 (already exists) は無視する。"""
+        url = f"{self.api_url}/{entity_type.lstrip('/')}"
+        data = json.dumps(payload).encode()
+        req = Request(url, data=data, headers=self._headers(), method="POST")
+        try:
+            with urlopen(req) as resp:
+                return json.loads(resp.read())
+        except HTTPError as e:
+            if e.code == 409:
+                return {"_already_exists": True}
+            err_body = e.read().decode()
+            raise RuntimeError(f"[POST {url}] HTTP {e.code}: {err_body}") from e

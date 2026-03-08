@@ -13,9 +13,10 @@
               <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
               {{ domainName }}
             </span>
-            <span v-if="svc" class="meta-item">
-              <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>
+            <span v-if="svc" class="meta-item" :class="tableRoleClass">
+              <svg viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 3.79 5 6v12c0 2.21 3.13 4 7 4s7-1.79 7-4V6c0-2.21-3.13-4-7-4zm0 2c3.31 0 5 1.34 5 2s-1.69 2-5 2-5-1.34-5-2 1.69-2 5-2z"/></svg>
               {{ svc }}
+              <span class="role-badge">{{ tableRole }}</span>
             </span>
             <span v-if="db" class="meta-item">
               <svg viewBox="0 0 24 24"><path d="M12 2C8.13 2 5 3.79 5 6v12c0 2.21 3.13 4 7 4s7-1.79 7-4V6c0-2.21-3.13-4-7-4zm0 2c3.31 0 5 1.34 5 2s-1.69 2-5 2-5-1.34-5-2 1.69-2 5-2z"/></svg>
@@ -29,10 +30,27 @@
               <svg viewBox="0 0 24 24"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>
               {{ columns.length }} カラム
             </span>
+            <!-- 担当部署 (Service の Team owner) -->
+            <span v-if="ownerTeam" class="meta-item meta-team">
+              <svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+              {{ ownerTeam }}
+            </span>
+            <!-- 担当者 (Table の User owner) -->
+            <span v-if="ownerUser" class="meta-item meta-user">
+              <svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+              {{ ownerUser }}
+            </span>
+            <!-- 更新頻度 (SLA タグ) -->
+            <span v-if="slaLabel" class="meta-item meta-sla">
+              <svg viewBox="0 0 24 24"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm4.24 16L12 15.45 7.77 18l1.12-4.81-3.73-3.23 4.92-.42L12 5l1.92 4.53 4.92.42-3.73 3.23L16.23 18z"/></svg>
+              更新: {{ slaLabel }}
+            </span>
           </div>
           <div v-if="table.description" class="ov-desc">{{ table.description }}</div>
+
+          <!-- タグ (Classification / PII 等) -->
           <div v-if="tags.length" class="tags">
-            <span v-for="tag in tags" :key="tag.tagFQN ?? tag.name" class="tag">
+            <span v-for="tag in tags" :key="tag.tagFQN ?? tag.name" class="tag" :class="tagClass(tag)">
               {{ tag.tagFQN ?? tag.name }}
             </span>
           </div>
@@ -131,11 +149,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
 import { api } from '@/api'
-import LineageGraph from '@/components/LineageGraph.vue'
-import type { Table, Column, Tag, TestCase, Lineage } from '@/types'
+import type { Column, DatabaseService, EntityLineage, Table, Tag, TestCase } from '@/types'
+import LineageGraph from '@/views/LineageGraph.vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 const emit = defineEmits<{
   breadcrumbs: [crumbs: { label: string; to?: string }[]]
@@ -157,7 +175,8 @@ const TABS = [
 const loading = ref(true)
 const error = ref('')
 const table = ref<Table | null>(null)
-const lineage = ref<Lineage | null>(null)
+const service = ref<DatabaseService | null>(null)
+const lineage = ref<EntityLineage | null>(null)
 const activeTab = ref('columns')
 
 // DQ
@@ -178,7 +197,8 @@ const columns = computed<Column[]>(() => table.value?.columns ?? [])
 const tags = computed<Tag[]>(() => table.value?.tags ?? [])
 const fqn = computed(() => table.value?.fullyQualifiedName ?? '')
 const parts = computed(() => fqn.value.split('.'))
-const svc = computed(() => parts.value[0] ?? '')
+// design.md: service名がシステム境界を示す (crm_service / public_service 等)
+const svc = computed(() => table.value?.service?.displayName ?? table.value?.service?.name ?? parts.value[0] ?? '')
 const db = computed(() => parts.value[1] ?? '')
 const schema = computed(() => parts.value[2] ?? '')
 const domainName = computed(() =>
@@ -186,6 +206,45 @@ const domainName = computed(() =>
     ? (table.value.domain.displayName ?? table.value.domain.name ?? '')
     : ''
 )
+
+/**
+ * design.md: テーブルの役割を service 名から判定
+ * - public_service 配下 → 公開スキーマ (public)
+ * - それ以外          → 収集元 (ingestion)
+ */
+const tableRole = computed(() => {
+  const s = (table.value?.service?.name ?? '').toLowerCase()
+  return s === 'public_service' ? '公開' : '収集元'
+})
+const tableRoleClass = computed(() =>
+  tableRole.value === '公開' ? 'meta-item-public' : 'meta-item-ingestion'
+)
+
+/** 担当部署: DatabaseService の Team owner */
+const ownerTeam = computed(() =>
+  service.value?.owners?.find((o) => o.type === 'team')?.displayName ?? ''
+)
+/** 担当者: Table の User owner */
+const ownerUser = computed(() =>
+  table.value?.owners?.find((o) => o.type === 'user')?.displayName ?? ''
+)
+/** 更新頻度: SLA タグ (SLA.daily 等) から日本語表示 */
+const SLA_MAP: Record<string, string> = { hourly: '毎時', daily: '毎日', weekly: '毎週', monthly: '毎月' }
+const slaLabel = computed(() => {
+  const slaTag = (table.value?.tags ?? []).find((t) => (t.tagFQN ?? '').startsWith('SLA.'))
+  if (!slaTag) return ''
+  const key = (slaTag.tagFQN ?? '').split('.')[1] ?? ''
+  return SLA_MAP[key] ?? key
+})
+
+function tagClass(tag: Tag): string {
+  const fqn = tag.tagFQN ?? ''
+  if (fqn.startsWith('PII.')) return 'tag-pii'
+  if (fqn.includes('public')) return 'tag-public'
+  if (fqn.includes('ingestion')) return 'tag-ingestion'
+  return ''
+}
+
 const dqPass = computed(() => testCases.value.filter((c) => tcStatus(c) === 'Success').length)
 const dqFail = computed(() => testCases.value.filter((c) => ['Failed', 'Aborted'].includes(tcStatus(c))).length)
 const dqNone = computed(() => testCases.value.filter((c) => !['Success', 'Failed', 'Aborted'].includes(tcStatus(c))).length)
@@ -268,6 +327,7 @@ async function load() {
   testCases.value = []
   sampleCols.value = []
   sampleRows.value = []
+  service.value = null
   try {
     const [t, l] = await Promise.all([
       api.getTable(tableId.value),
@@ -275,6 +335,11 @@ async function load() {
     ])
     table.value = t
     lineage.value = l
+    // 担当部署取得のため DatabaseService をロード
+    const svcName = t.service?.name
+    if (svcName) {
+      try { service.value = await api.getDatabaseService(svcName) } catch { /* ignore */ }
+    }
     const domId = t.domain?.id
     emit('breadcrumbs', [
       { label: 'ホーム', to: '/' },
@@ -317,7 +382,30 @@ onMounted(load)
 }
 .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .tag { padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; background: var(--accent-l); color: var(--accent-d); }
+.tag-pii { background: var(--red-l); color: var(--red); }
+.tag-public { background: var(--green-l); color: var(--green); }
+.tag-ingestion { background: var(--yellow-l); color: var(--yellow); }
 
+/* service name badge — design.md: service がシステム境界を示す */
+.meta-item-ingestion { background: #fff3e0; border-color: #ffcc80; color: #e65100; }
+.meta-item-ingestion svg { fill: #e65100; }
+.meta-item-public { background: var(--green-l); border-color: #a5d6a7; color: var(--green); }
+.meta-item-public svg { fill: var(--green); }
+.role-badge {
+  display: inline-block; margin-left: 4px;
+  padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 700;
+  background: rgba(0,0,0,.08); letter-spacing: .3px;
+}
+/* 担当部署・担当者・更新頻度バッジ */
+.meta-team { background: #e8f5e9; border-color: #a5d6a7; color: #2e7d32; }
+.meta-team svg { fill: #2e7d32; }
+.meta-user { background: #e3f2fd; border-color: #90caf9; color: #1565c0; }
+.meta-user svg { fill: #1565c0; }
+.meta-sla { background: #fff8e1; border-color: #ffe082; color: #f57f17; }
+.meta-sla svg { fill: #f57f17; }
+</style>
+
+<style scoped>
 /* Tabs */
 .tabs { display: flex; border-bottom: 1px solid var(--border); }
 .tb { padding: 11px 18px; border: none; background: transparent; color: var(--t2); font-size: 13px; font-weight: 500; cursor: pointer; border-bottom: 2.5px solid transparent; margin-bottom: -1px; white-space: nowrap; }
@@ -371,3 +459,4 @@ onMounted(load)
 .stbl td.null { color: var(--t3); font-style: italic; }
 .row-count { font-size: 11px; color: var(--t3); margin-top: 8px; }
 </style>
+

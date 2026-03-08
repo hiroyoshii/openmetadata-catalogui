@@ -6,19 +6,31 @@
           <marker id="arr" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto">
             <path d="M0,0 L0,6 L7,3 z" fill="#bbb" />
           </marker>
+          <marker id="arr-focus" markerWidth="7" markerHeight="7" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L7,3 z" fill="#5c6bc0" />
+          </marker>
         </defs>
         <rect :width="W" :height="H" fill="#f9f9f9" />
 
         <!-- Edges -->
-        <path
-          v-for="(edge, i) in renderedEdges"
-          :key="i"
-          fill="none"
-          :stroke="edge.focused ? '#5c6bc0' : '#bbb'"
-          :stroke-width="edge.focused ? 2 : 1.5"
-          marker-end="url(#arr)"
-          :d="edge.d"
-        />
+        <g v-for="(edge, i) in renderedEdges" :key="i">
+          <path
+            fill="none"
+            :stroke="edge.focused ? '#5c6bc0' : '#bbb'"
+            :stroke-width="edge.focused ? 2 : 1.5"
+            :marker-end="edge.focused ? 'url(#arr-focus)' : 'url(#arr)'"
+            :d="edge.d"
+          />
+          <!-- パイプライン名ラベル -->
+          <text
+            v-if="edge.pipeline"
+            :x="edge.labelX" :y="edge.labelY - 4"
+            text-anchor="middle" font-size="9"
+            font-family="system-ui" fill="#888"
+          >
+            <tspan>⚡ {{ edge.pipeline }}</tspan>
+          </text>
+        </g>
 
         <!-- Nodes -->
         <g
@@ -56,6 +68,9 @@
       <span>← upstream: {{ upCount }} テーブル</span>
       <span class="lg-focus">◉ {{ props.table.name }}</span>
       <span>downstream: {{ downCount }} テーブル →</span>
+      <span v-if="pipelines.length" class="lg-pipelines">
+        ⚡ {{ pipelines.join(' / ') }}
+      </span>
     </div>
     <p v-if="hasLineage" class="lg-hint">他のノードをクリックするとそのテーブルに移動します</p>
     <div v-else class="no-data">Lineage データなし</div>
@@ -64,9 +79,9 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { Table, Lineage } from '@/types'
+import type { Table, EntityLineage } from '@/types'
 
-const props = defineProps<{ table: Table; lineage: Lineage }>()
+const props = defineProps<{ table: Table; lineage: EntityLineage }>()
 const emit = defineEmits<{ navigate: [id: string] }>()
 
 const W = 700, H = 280, NW = 148, NH = 48, G = 14
@@ -85,7 +100,7 @@ const nodeMap = computed<Record<string, NodePos>>(() => {
   const nodes = props.lineage.nodes ?? []
 
   const nm: Record<string, NodePos> = {}
-  nm[props.table.id] = { id: props.table.id, name: props.table.name, fqn: props.table.fullyQualifiedName, focus: true, x: 0, y: 0 }
+  nm[props.table.id] = { id: props.table.id, name: props.table.name, fqn: props.table.fullyQualifiedName ?? '', focus: true, x: 0, y: 0 }
   nodes.forEach((n) => {
     nm[n.id] = { id: n.id, name: n.name ?? '', fqn: n.fullyQualifiedName ?? '', focus: false, x: 0, y: 0 }
   })
@@ -110,6 +125,15 @@ const downCount = computed(() =>
   (props.lineage.downstreamEdges ?? []).filter((e) => e.toEntity !== props.table.id && nodeMap.value[e.toEntity]).length
 )
 
+/** 関連するパイプライン名の重複なしリスト */
+const pipelines = computed(() => {
+  const all = [...(props.lineage.upstreamEdges ?? []), ...(props.lineage.downstreamEdges ?? [])]
+  const names = all
+    .map((e) => e.lineageDetails?.pipeline?.displayName ?? e.lineageDetails?.pipeline?.name)
+    .filter((n): n is string => !!n)
+  return [...new Set(names)]
+})
+
 const renderedNodes = computed(() =>
   Object.values(nodeMap.value).map((n) => {
     const name = n.name || '(unknown)'
@@ -123,14 +147,21 @@ const renderedNodes = computed(() =>
 const renderedEdges = computed(() => {
   const allEdges = [...(props.lineage.upstreamEdges ?? []), ...(props.lineage.downstreamEdges ?? [])]
   const nm = nodeMap.value
+  // fromEntity=toEntity (self-loop) など不正エッジを除外し重複排除
+  const seen = new Set<string>()
   return allEdges.flatMap((e) => {
+    if (e.fromEntity === e.toEntity) return []
+    const key = `${e.fromEntity}→${e.toEntity}`
+    if (seen.has(key)) return []
+    seen.add(key)
     const f = nm[e.fromEntity], t = nm[e.toEntity]
     if (!f || !t) return []
     const x1 = f.x + NW, y1 = f.y + NH / 2
-    const x2 = t.x, y2 = t.y + NH / 2
+    const x2 = t.x,      y2 = t.y + NH / 2
     const mx = (x1 + x2) / 2
     const focused = e.fromEntity === props.table.id || e.toEntity === props.table.id
-    return [{ d: `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`, focused }]
+    const pipeline = e.lineageDetails?.pipeline?.displayName ?? e.lineageDetails?.pipeline?.name ?? null
+    return [{ d: `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`, focused, pipeline, labelX: mx, labelY: (y1 + y2) / 2 }]
   })
 })
 </script>
@@ -140,5 +171,7 @@ const renderedEdges = computed(() => {
 .lg-svg { display: block; width: 100%; }
 .lg-meta { display: flex; gap: 16px; margin-top: 8px; font-size: 11px; color: var(--t3); flex-wrap: wrap; }
 .lg-focus { color: var(--accent); font-weight: 600; }
+.lg-pipelines { color: var(--t2); }
 .lg-hint { font-size: 11px; color: var(--t3); margin-top: 4px; }
 </style>
+
