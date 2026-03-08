@@ -1,0 +1,270 @@
+#  OpenMetadata - Data Catalog / System Catalog / Lineage サンプル構成 (push 型)
+#
+#  サービス構成:
+#    mysql              - メタデータ永続化 (data catalog / system catalog / lineage データ格納)
+#    elasticsearch      - 全文検索インデックス (カタログ検索を高速化)
+#    execute-migrate-all - DBスキーマ初期化 (初回起動時のみ実行)
+#    openmetadata-server - OpenMetadata サーバー & UI (ポート 8585)
+#    ingestion          - 自律 Airflow: Lineage Backend で OM API へ push (ポート 8080)
+#
+#  アクセス先:
+#    OpenMetadata UI  : http://localhost:8585  (admin / admin)
+#    Airflow UI       : http://localhost:8080  (admin / admin)
+#
+#  push 型セットアップ:
+#    1. docker compose up -d
+#    2. python scripts/register_catalog.py   # カタログ初期登録
+#    3. python scripts/register_lineage.py   # Lineage 手動登録 (または Airflow DAG 実行)
+
+version: "3.9"
+
+x-openmetadata-common-env: &openmetadata-common-env
+  OPENMETADATA_CLUSTER_NAME: ${OPENMETADATA_CLUSTER_NAME:-openmetadata}
+  SERVER_PORT: ${SERVER_PORT:-8585}
+  SERVER_ADMIN_PORT: ${SERVER_ADMIN_PORT:-8586}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+  # 認証設定 (no-auth: ログイン不要モード)
+  AUTHORIZER_CLASS_NAME: ${AUTHORIZER_CLASS_NAME:-org.openmetadata.service.security.NoopAuthorizer}
+  AUTHORIZER_REQUEST_FILTER: ${AUTHORIZER_REQUEST_FILTER:-org.openmetadata.service.security.NoopFilter}
+  AUTHORIZER_ADMIN_PRINCIPALS: ${AUTHORIZER_ADMIN_PRINCIPALS:-[admin]}
+  AUTHORIZER_ALLOWED_REGISTRATION_DOMAIN: ${AUTHORIZER_ALLOWED_REGISTRATION_DOMAIN:-["all"]}
+  AUTHORIZER_INGESTION_PRINCIPALS: ${AUTHORIZER_INGESTION_PRINCIPALS:-[ingestion-bot]}
+  AUTHORIZER_PRINCIPAL_DOMAIN: ${AUTHORIZER_PRINCIPAL_DOMAIN:-"open-metadata.org"}
+  AUTHORIZER_ENFORCE_PRINCIPAL_DOMAIN: ${AUTHORIZER_ENFORCE_PRINCIPAL_DOMAIN:-false}
+  AUTHORIZER_ENABLE_SECURE_SOCKET: ${AUTHORIZER_ENABLE_SECURE_SOCKET:-false}
+  AUTHENTICATION_PROVIDER: ${AUTHENTICATION_PROVIDER:-basic}
+  AUTHENTICATION_PUBLIC_KEYS: ${AUTHENTICATION_PUBLIC_KEYS:-[http://localhost:8585/api/v1/system/config/jwks]}
+  AUTHENTICATION_JWT_PRINCIPAL_CLAIMS: ${AUTHENTICATION_JWT_PRINCIPAL_CLAIMS:-[email,preferred_username,sub]}
+  AUTHENTICATION_ENABLE_SELF_SIGNUP: ${AUTHENTICATION_ENABLE_SELF_SIGNUP:-true}
+
+  # JWT 設定
+  RSA_PUBLIC_KEY_FILE_PATH: ${RSA_PUBLIC_KEY_FILE_PATH:-"./conf/public_key.der"}
+  RSA_PRIVATE_KEY_FILE_PATH: ${RSA_PRIVATE_KEY_FILE_PATH:-"./conf/private_key.der"}
+  JWT_ISSUER: ${JWT_ISSUER:-"open-metadata.org"}
+  JWT_KEY_ID: ${JWT_KEY_ID:-"Gb389a-9f76-gdjs-a92j-0242bk94356"}
+
+  # MySQL 接続設定
+  DB_DRIVER_CLASS: ${DB_DRIVER_CLASS:-com.mysql.cj.jdbc.Driver}
+  DB_SCHEME: ${DB_SCHEME:-mysql}
+  DB_PARAMS: ${DB_PARAMS:-allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC}
+  DB_USER: ${DB_USER:-openmetadata_user}
+  DB_USER_PASSWORD: ${DB_USER_PASSWORD:-openmetadata_password}
+  DB_HOST: ${DB_HOST:-mysql}
+  DB_PORT: ${DB_PORT:-3306}
+  OM_DATABASE: ${OM_DATABASE:-openmetadata_db}
+
+  # Elasticsearch 接続設定
+  ELASTICSEARCH_HOST: ${ELASTICSEARCH_HOST:-elasticsearch}
+  ELASTICSEARCH_PORT: ${ELASTICSEARCH_PORT:-9200}
+  ELASTICSEARCH_SCHEME: ${ELASTICSEARCH_SCHEME:-http}
+  ELASTICSEARCH_USER: ${ELASTICSEARCH_USER:-""}
+  ELASTICSEARCH_PASSWORD: ${ELASTICSEARCH_PASSWORD:-""}
+  SEARCH_TYPE: ${SEARCH_TYPE:-"elasticsearch"}
+  ELASTICSEARCH_CONNECTION_TIMEOUT_SECS: ${ELASTICSEARCH_CONNECTION_TIMEOUT_SECS:-5}
+  ELASTICSEARCH_SOCKET_TIMEOUT_SECS: ${ELASTICSEARCH_SOCKET_TIMEOUT_SECS:-60}
+  ELASTICSEARCH_KEEP_ALIVE_TIMEOUT_SECS: ${ELASTICSEARCH_KEEP_ALIVE_TIMEOUT_SECS:-600}
+  ELASTICSEARCH_BATCH_SIZE: ${ELASTICSEARCH_BATCH_SIZE:-100}
+  ELASTICSEARCH_PAYLOAD_BYTES_SIZE: ${ELASTICSEARCH_PAYLOAD_BYTES_SIZE:-10485760}
+  ELASTICSEARCH_INDEX_MAPPING_LANG: ${ELASTICSEARCH_INDEX_MAPPING_LANG:-EN}
+
+  # Ingestion Pipeline (Airflow) 設定
+  # [push 型] PIPELINE_SERVICE_CLIENT_ENABLED は openmetadata-server サービスで false に上書き
+  PIPELINE_SERVICE_CLIENT_ENDPOINT: ${PIPELINE_SERVICE_CLIENT_ENDPOINT:-http://ingestion:8080}
+  SERVER_HOST_API_URL: ${SERVER_HOST_API_URL:-http://openmetadata-server:8585/api}
+  PIPELINE_SERVICE_CLIENT_ENABLED: ${PIPELINE_SERVICE_CLIENT_ENABLED:-false}
+
+  # Secret Manager
+  SECRET_MANAGER: ${SECRET_MANAGER:-db}
+
+  # ヒープメモリ設定
+  OPENMETADATA_HEAP_OPTS: ${OPENMETADATA_HEAP_OPTS:--Xmx1G -Xms1G}
+
+  # イベントモニタリング
+  EVENT_MONITOR: ${EVENT_MONITOR:-prometheus}
+  EVENT_MONITOR_BATCH_SIZE: ${EVENT_MONITOR_BATCH_SIZE:-10}
+  EVENT_MONITOR_PATH_PATTERN: ${EVENT_MONITOR_PATH_PATTERN:-["/api/v1/tables/*", "/api/v1/health-check"]}
+
+volumes:
+  ingestion-volume-dag-airflow:
+  ingestion-volume-dags:
+  ingestion-volume-tmp:
+  es-data:
+  mysql-data:
+
+networks:
+  app_net:
+    ipam:
+      driver: default
+      config:
+        - subnet: "172.16.240.0/24"
+
+services:
+
+  # ──────────────────────────────────────────────
+  # MySQL: OpenMetadata のメタデータ永続化ストア
+  #   - data catalog (テーブル・カラム・タグ等)
+  #   - system catalog (サービス・パイプライン定義)
+  #   - lineage グラフデータ
+  # ──────────────────────────────────────────────
+  mysql:
+    container_name: openmetadata_mysql
+    image: docker.getcollate.io/openmetadata/db:1.6.2
+    command: "--sort_buffer_size=10M"
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+    expose:
+      - 3306
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - app_net
+    healthcheck:
+      test: mysql --user=root --password=$$MYSQL_ROOT_PASSWORD --silent --execute "use openmetadata_db"
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  # ──────────────────────────────────────────────
+  # Elasticsearch: カタログ全文検索インデックス
+  #   - テーブル・カラム・ダッシュボード等の検索
+  #   - タグ・説明文による横断検索
+  # ──────────────────────────────────────────────
+  elasticsearch:
+    container_name: openmetadata_elasticsearch
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.4
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms1024m -Xmx1024m
+      - xpack.security.enabled=false
+    networks:
+      - app_net
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: "curl -s http://localhost:9200/_cluster/health?pretty | grep status | grep -qE 'green|yellow' || exit 1"
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+
+  # ──────────────────────────────────────────────
+  # DBマイグレーション (初回のみ実行)
+  # ──────────────────────────────────────────────
+  execute-migrate-all:
+    container_name: execute_migrate_all
+    image: docker.getcollate.io/openmetadata/server:1.6.2
+    command: "./bootstrap/openmetadata-ops.sh migrate"
+    environment:
+      <<: *openmetadata-common-env
+      MIGRATION_LIMIT_PARAM: ${MIGRATION_LIMIT_PARAM:-1200}
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    networks:
+      - app_net
+    restart: on-failure
+
+  # ──────────────────────────────────────────────
+  # OpenMetadata Server: メインサーバー & UI
+  #   http://localhost:8585  (ログイン不要)
+  #
+  #   主な機能:
+  #   - Data Catalog: テーブル・カラム・タグ管理
+  #   - System Catalog: データベース・パイプライン・ダッシュボード登録
+  #   - Lineage: データフロー可視化 (上流/下流の追跡)
+  #   - Glossary: ビジネス用語集管理
+  #
+  #   push 型構成:
+  #   - PIPELINE_SERVICE_CLIENT_ENABLED=false により OM→Airflow の制御依存を切断
+  #   - メタデータは API スクリプト / Airflow Lineage Backend から push される
+  # ──────────────────────────────────────────────
+  openmetadata-server:
+    container_name: openmetadata_server
+    restart: always
+    image: docker.getcollate.io/openmetadata/server:1.6.2
+    environment:
+      <<: *openmetadata-common-env
+      # [push 型] OM が Airflow を制御しないよう Pipeline Service Client を無効化
+      PIPELINE_SERVICE_CLIENT_ENABLED: ${PIPELINE_SERVICE_CLIENT_ENABLED:-false}
+    ports:
+      - "8585:8585"
+      - "8586:8586"
+    depends_on:
+      execute-migrate-all:
+        condition: service_completed_successfully
+      elasticsearch:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    networks:
+      - app_net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8585/api/v1/system/config/auth"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+  # ──────────────────────────────────────────────
+  # Ingestion (Airflow): 自律動作する Airflow
+  #   http://localhost:8080  (admin / admin)
+  #
+  #   push 型への変更点:
+  #   - OM による DAG 管理から切り離し (PIPELINE_SERVICE_CLIENT_ENABLED=false 側で制御)
+  #   - Lineage Backend を有効化: DAG 実行時に自動で OM API へリネージを push
+  #   - dags/ に カスタム DAG (inlets/outlets 定義済み) をマウント
+  # ──────────────────────────────────────────────
+  ingestion:
+    container_name: openmetadata_ingestion
+    image: docker.getcollate.io/openmetadata/ingestion:1.6.2
+    depends_on:
+      elasticsearch:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+      openmetadata-server:
+        condition: service_started
+    environment:
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__OPENMETADATA_AIRFLOW_APIS__DAG_GENERATED_CONFIGS: "/opt/airflow/dag_generated_configs"
+      # Airflow 用 DB (MySQL 内の airflow_db を使用)
+      DB_HOST: ${AIRFLOW_DB_HOST:-mysql}
+      DB_PORT: ${AIRFLOW_DB_PORT:-3306}
+      AIRFLOW_DB: ${AIRFLOW_DB:-airflow_db}
+      DB_SCHEME: ${AIRFLOW_DB_SCHEME:-mysql+mysqldb}
+      DB_USER: ${AIRFLOW_DB_USER:-airflow_user}
+      DB_PASSWORD: ${AIRFLOW_DB_PASSWORD:-airflow_pass}
+      DB_PROPERTIES: ${AIRFLOW_DB_PROPERTIES:-}
+      # [push 型] Lineage Backend: DAG 実行時に OM API へリネージを自動 push
+      AIRFLOW__LINEAGE__BACKEND: ${AIRFLOW__LINEAGE__BACKEND:-airflow_provider_openmetadata.lineage.backend.OpenMetadataLineageBackend}
+      AIRFLOW__LINEAGE__AIRFLOW_SERVICE_NAME: ${AIRFLOW__LINEAGE__AIRFLOW_SERVICE_NAME:-local_airflow}
+      AIRFLOW__LINEAGE__OPENMETADATA_API_ENDPOINT: ${AIRFLOW__LINEAGE__OPENMETADATA_API_ENDPOINT:-http://openmetadata-server:8585/api}
+      # JWT_TOKEN: OM の admin ユーザーの無期限トークン。更新が必要な場合は .env で上書き。
+      # 生成コマンド: python scripts/helpers/generate_om_token.py
+      AIRFLOW__LINEAGE__JWT_TOKEN: ${AIRFLOW__LINEAGE__JWT_TOKEN:-}
+      # テスト・デバッグ用: Airflow config API を公開する (本番では false 推奨)
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    entrypoint: /bin/bash
+    command:
+      - "/opt/airflow/ingestion_dependency.sh"
+    expose:
+      - 8080
+    ports:
+      - "8080:8080"
+    networks:
+      - app_net
+    volumes:
+      - ingestion-volume-dag-airflow:/opt/airflow/dag_generated_configs
+      - ingestion-volume-dags:/opt/airflow/dags
+      - ingestion-volume-tmp:/tmp
+      - ./dags:/opt/airflow/dags/custom  # [push 型] カスタム DAG (inlets/outlets 定義済み) をマウント
+
+  # NOTE: sample-postgres は push 型では不要のため削除済み
+  # テーブル定義は scripts/register_catalog.py で API 経由登録する
